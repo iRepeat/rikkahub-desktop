@@ -126,7 +126,7 @@ bun run smoke:request-chain
 
 如果 Rikkahub 對你有幫助，歡迎按個 Star ⭐
 
-[![Star History Chart](https://api.star-history.com/svg?repos=yuh-G/rikkahub-desktop&type=Date)](https://star-history.com/#yuh-G/rikkahub-desktop&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=yuh-G/rikkahub-pc&type=Date)](https://star-history.com/#yuh-G/rikkahub-desktop&Date)
 
 ## 📄 授權條款
 

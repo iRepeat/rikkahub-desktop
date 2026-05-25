@@ -426,62 +426,6 @@ Requirements:
 </conversation>`,
 };
 
-// Precise px input used right next to FontSelect — drives the body / chat-bubble font-size
-// CSS variables in root.tsx. Uses a native number input so the browser draws the up/down
-// spinner buttons; users can also type a value. Range 10–28 to cover comfortable reading
-// on both dense laptops and high-DPI/zoom-out desktop setups without letting users brick
-// the layout. We clamp on commit so typing "999" snaps back to 28 instead of breaking the UI.
-function FontSizeSlider({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (next: number) => void;
-}) {
-  const clamped = Math.max(10, Math.min(28, Number.isFinite(value) ? value : 14));
-  const [draft, setDraft] = React.useState<string>(String(clamped));
-  // Sync draft when the persisted value changes (e.g. after settings broadcast).
-  React.useEffect(() => {
-    setDraft(String(clamped));
-  }, [clamped]);
-  const commit = (raw: string) => {
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed)) {
-      setDraft(String(clamped));
-      return;
-    }
-    const next = Math.max(10, Math.min(28, Math.round(parsed)));
-    setDraft(String(next));
-    if (next !== clamped) onChange(next);
-  };
-  return (
-    <label className="flex items-center justify-between gap-2">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <div className="flex items-center gap-1">
-        <Input
-          type="number"
-          min={10}
-          max={28}
-          step={1}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={(event) => commit(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              commit((event.target as HTMLInputElement).value);
-            }
-          }}
-          className="h-7 w-20 tabular-nums"
-        />
-        <span className="text-xs text-muted-foreground">px</span>
-      </div>
-    </label>
-  );
-}
-
 function FontSelect({
   label,
   value,
@@ -869,32 +813,18 @@ function GeneralSection({ settings, onSettings }: { settings: Settings; onSettin
             />
           </label>
           <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-2">
-              <FontSelect
-                label="界面字体"
-                value={textValue(display.uiFontFamily)}
-                fallbackFamily={"\"Noto Sans SC\", \"Microsoft YaHei\", ui-sans-serif, system-ui, sans-serif"}
-                onChange={(value, family) => void patchDisplay({ uiFontFamily: value, uiFontFamilyCss: family })}
-              />
-              <FontSizeSlider
-                label="界面字号"
-                value={Number(display.uiFontSize ?? 14)}
-                onChange={(next) => void patchDisplay({ uiFontSize: next })}
-              />
-            </div>
-            <div className="space-y-2">
-              <FontSelect
-                label="对话字体"
-                value={textValue(display.chatFontFamily)}
-                fallbackFamily={textValue(display.uiFontFamilyCss) || "\"Noto Sans SC\", \"Microsoft YaHei\", ui-sans-serif, system-ui, sans-serif"}
-                onChange={(value, family) => void patchDisplay({ chatFontFamily: value, chatFontFamilyCss: family })}
-              />
-              <FontSizeSlider
-                label="对话字号"
-                value={Number(display.chatFontSize ?? 16)}
-                onChange={(next) => void patchDisplay({ chatFontSize: next })}
-              />
-            </div>
+            <FontSelect
+              label="界面字体"
+              value={textValue(display.uiFontFamily)}
+              fallbackFamily={"\"Noto Sans SC\", \"Microsoft YaHei\", ui-sans-serif, system-ui, sans-serif"}
+              onChange={(value, family) => void patchDisplay({ uiFontFamily: value, uiFontFamilyCss: family })}
+            />
+            <FontSelect
+              label="对话字体"
+              value={textValue(display.chatFontFamily)}
+              fallbackFamily={textValue(display.uiFontFamilyCss) || "\"Noto Sans SC\", \"Microsoft YaHei\", ui-sans-serif, system-ui, sans-serif"}
+              onChange={(value, family) => void patchDisplay({ chatFontFamily: value, chatFontFamilyCss: family })}
+            />
           </div>
           <div className="grid gap-3 md:grid-cols-2">
             {[
@@ -4676,12 +4606,17 @@ function EditorShell({
 
 function DataSection({ settings, onSettings }: { settings: Settings; onSettings: (settings: Settings) => void }) {
   const importInputRef = React.useRef<HTMLInputElement>(null);
+  const schemaInputRef = React.useRef<HTMLInputElement>(null);
   const [exporting, setExporting] = React.useState(false);
-  const [exportProgress, setExportProgress] = React.useState(0); // 0-100, only meaningful during download
+  const [exportProgress, setExportProgress] = React.useState(0);
   const [exportedBytes, setExportedBytes] = React.useState(0);
   const [exportTotalBytes, setExportTotalBytes] = React.useState(0);
   const [importing, setImporting] = React.useState(false);
   const [importPhase, setImportPhase] = React.useState<"idle" | "uploading" | "processing">("idle");
+  const [showExportDialog, setShowExportDialog] = React.useState(false);
+  const [schemaStatus, setSchemaStatus] = React.useState<{ hasAndroidSchema: boolean; schemaInfo: { identityHash: string; version: number } | null; conversationCount: number } | null>(null);
+  const [registeringSchema, setRegisteringSchema] = React.useState(false);
+  const [schemaExpanded, setSchemaExpanded] = React.useState(false);
   const [importProgress, setImportProgress] = React.useState(0); // 0-100 during upload
   const defaultWebDav = (settings.webDavConfig ?? { url: "", username: "", password: "", path: "rikkahub_backups", items: ["DATABASE", "FILES"] }) as WebDavConfig;
   const [webDavDraft, setWebDavDraft] = React.useState<WebDavConfig>(defaultWebDav);
@@ -4710,6 +4645,10 @@ function DataSection({ settings, onSettings }: { settings: Settings; onSettings:
     setWebDavDraft(defaultWebDav);
     webDavDirtyRef.current = false;
   }, [defaultWebDav.url, defaultWebDav.username, defaultWebDav.password, defaultWebDav.path, JSON.stringify(defaultWebDav.items ?? [])]);
+
+  React.useEffect(() => {
+    fetch(appendWebAuthQuery("/api/data/export/status")).then(r => r.ok ? r.json() : null).then(s => { if (s) setSchemaStatus(s); }).catch(() => {});
+  }, []);
 
   const patchWebDav = (patch: Partial<WebDavConfig>) => {
     webDavDirtyRef.current = true;
@@ -4756,7 +4695,20 @@ function DataSection({ settings, onSettings }: { settings: Settings; onSettings:
     }
   };
 
+  const warnIfNoSchema = async () => {
+    try {
+      const res = await fetch(appendWebAuthQuery("/api/data/export/status"));
+      if (res.ok) {
+        const s = await res.json();
+        if (!s.hasAndroidSchema && s.conversationCount > 0) {
+          toast("提示：尚未获取手机端数据库格式，备份不含对话记录。请在「数据备份」区域点击「导出备份」完成格式注册。", { duration: 6000 });
+        }
+      }
+    } catch { /* */ }
+  };
+
   const backupWebDav = async () => {
+    await warnIfNoSchema();
     setWebDavBusy("backup");
     try {
       await saveWebDav(false);
@@ -4846,6 +4798,7 @@ function DataSection({ settings, onSettings }: { settings: Settings; onSettings:
     }
   };
   const backupS3 = async () => {
+    await warnIfNoSchema();
     setS3Busy("backup");
     try {
       await saveS3(false);
@@ -4885,7 +4838,39 @@ function DataSection({ settings, onSettings }: { settings: Settings; onSettings:
     }
   };
 
-  const exportData = async () => {
+  const handleExportClick = async () => {
+    try {
+      const res = await fetch(appendWebAuthQuery("/api/data/export/status"));
+      if (res.ok) setSchemaStatus(await res.json());
+    } catch { /* */ }
+    setShowExportDialog(true);
+  };
+
+  const handleRegisterSchema = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setRegisteringSchema(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch(appendWebAuthQuery("/api/data/register-schema"), {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "注册失败");
+      setSchemaStatus((prev) => prev ? { ...prev, hasAndroidSchema: true, schemaInfo: data.schemaInfo } : { hasAndroidSchema: true, schemaInfo: data.schemaInfo, conversationCount: 0 });
+      toast.success(`已成功获取手机端数据库格式（版本 ${data.schemaInfo.version}，标识 ${data.schemaInfo.identityHash.slice(0, 8)}...）`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "注册失败");
+    } finally {
+      setRegisteringSchema(false);
+    }
+  };
+
+  const doExport = async () => {
+    setShowExportDialog(false);
     setExporting(true);
     setExportProgress(0);
     setExportedBytes(0);
@@ -5042,13 +5027,80 @@ function DataSection({ settings, onSettings }: { settings: Settings; onSettings:
 
   return (
     <>
+      {showExportDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowExportDialog(false)}>
+          <div className="mx-4 max-w-md rounded-lg bg-card p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold">确认导出</h3>
+            <div className="mt-3 text-sm text-muted-foreground">
+              {schemaStatus?.hasAndroidSchema
+                ? `本次导出包含 ${schemaStatus.conversationCount} 条对话记录及全部配置，可直接在手机端导入。`
+                : "当前未注册手机端格式，导出的备份不含对话记录。请先在上方「手机端适配」区域完成注册。"}
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setShowExportDialog(false)}>取消</Button>
+              <Button onClick={() => void doExport()}>
+                <Download className="mr-1 size-4" />
+                {schemaStatus?.hasAndroidSchema ? "确认导出" : "导出（不含对话）"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       <SectionHeader icon={Database} title="数据设置" subtitle="本地状态导入导出、聊天文件存储路径，以及 WebDAV / S3 远端同步。" />
+      <div className="mb-4 rounded-lg border p-4">
+        <div className="flex items-center gap-2 cursor-pointer" onClick={() => schemaStatus?.hasAndroidSchema && setSchemaExpanded(!schemaExpanded)}>
+          <div className="text-sm font-medium">手机端适配</div>
+          {schemaStatus?.hasAndroidSchema ? (
+            <span className="rounded bg-green-100 px-1.5 py-0.5 text-xs text-green-700 dark:bg-green-900 dark:text-green-300">已就绪</span>
+          ) : (
+            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700 dark:bg-amber-900 dark:text-amber-300">未注册</span>
+          )}
+          {schemaStatus?.hasAndroidSchema && (
+            <span className="ml-auto text-xs text-muted-foreground">{schemaExpanded ? "收起" : "展开"}</span>
+          )}
+        </div>
+        {schemaStatus?.hasAndroidSchema && !schemaExpanded && (
+          <div className="mt-2 text-xs text-muted-foreground">
+            已获取手机端数据库格式（版本 {schemaStatus.schemaInfo?.version}，标识 {schemaStatus.schemaInfo?.identityHash.slice(0, 8)}...）。PC 端导出的备份可被手机端正常识别。
+          </div>
+        )}
+        {(!schemaStatus?.hasAndroidSchema || schemaExpanded) && (
+          <div className="mt-2 space-y-2">
+            {!schemaStatus?.hasAndroidSchema && (
+              <div className="text-xs text-muted-foreground">
+                未注册手机端数据库格式。<strong>PC 端的对话数据将无法导入到手机端</strong>，S3 备份和 WebDAV 备份中也不会包含对话记录。
+              </div>
+            )}
+            {schemaStatus?.hasAndroidSchema && (
+              <div className="text-xs text-muted-foreground">
+                当前格式：版本 {schemaStatus.schemaInfo?.version}，标识 {schemaStatus.schemaInfo?.identityHash.slice(0, 8)}...。如需更新，请重新上传手机端备份。
+              </div>
+            )}
+            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950">
+              <div className="text-xs font-medium">{schemaStatus?.hasAndroidSchema ? "更新格式" : "如何注册？"}</div>
+              <ol className="mt-1.5 list-inside list-decimal space-y-1 text-xs text-muted-foreground">
+                <li>在手机端 Rikkahub 中，进入「设置 → 备份」，导出一份 .zip 备份文件</li>
+                <li>点击下方按钮，选择刚才导出的 .zip 文件上传</li>
+                <li>PC 端会从中提取数据库格式信息（不会导入任何数据到 PC）</li>
+              </ol>
+              <div className="mt-2 text-xs font-bold text-amber-700 dark:text-amber-300">
+                注：首次使用需要执行一次此操作。如果手机端 APP 有版本更新，需要重新获取一次。
+              </div>
+              <Button variant="outline" size="sm" className="mt-3" onClick={() => schemaInputRef.current?.click()} disabled={registeringSchema}>
+                {registeringSchema ? <Loader2 className="mr-1 size-3 animate-spin" /> : <Upload className="mr-1 size-3" />}
+                上传手机备份（仅提取格式）
+              </Button>
+              <input ref={schemaInputRef} className="sr-only" type="file" accept="application/zip,.zip" onChange={(e) => void handleRegisterSchema(e)} />
+            </div>
+          </div>
+        )}
+      </div>
       <div className="grid gap-4 md:grid-cols-2">
         <div className="rounded-lg border bg-card p-4">
           <div className="text-sm font-medium">数据备份</div>
           <div className="mt-1 text-xs text-muted-foreground">导出 .zip 备份（兼容 Android 端导入），包含设置、会话、文件、Skills、MCP / 提示注入 / 世界书 / 快捷消息等。导入也接受 Android 端导出的 .zip 备份及历史 PC 版本的 .json 备份。备份较大时导入可能需要 1-2 分钟。</div>
           <div className="mt-4 flex flex-wrap gap-2">
-            <Button variant="outline" onClick={() => void exportData()} disabled={exporting || importing}>
+            <Button variant="outline" onClick={() => void handleExportClick()} disabled={exporting || importing}>
               {exporting ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
               导出备份
             </Button>
@@ -5119,7 +5171,7 @@ function DataSection({ settings, onSettings }: { settings: Settings; onSettings:
         <div className="rounded-lg border bg-card p-4 md:col-span-2">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-medium">WebDAV 备份</div>
+              <div className="flex items-center gap-2 text-sm font-medium">WebDAV 备份{!schemaStatus?.hasAndroidSchema && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-900 dark:text-amber-300">对话不可同步</span>}</div>
               <div className="mt-1 text-xs text-muted-foreground">通过 WebDAV 测试连接、立即备份、列出远端备份、恢复或删除。备份内容包含本地 JSON 状态、Skills 与上传文件。</div>
             </div>
             <div className="text-xs text-muted-foreground">{webDavBusy ? "正在处理..." : "已自动保存"}</div>
@@ -5204,7 +5256,7 @@ function DataSection({ settings, onSettings }: { settings: Settings; onSettings:
         <div className="rounded-lg border bg-card p-4 md:col-span-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-medium">S3 备份</div>
+              <div className="flex items-center gap-2 text-sm font-medium">S3 备份{!schemaStatus?.hasAndroidSchema && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-900 dark:text-amber-300">对话不可同步</span>}</div>
               <div className="mt-1 text-xs text-muted-foreground">支持标准 AWS S3 与兼容 endpoint（MinIO/R2/腾讯云 COS/阿里云 OSS 等）。备份内容与 WebDAV 一致。</div>
             </div>
             <div className="flex items-center gap-2">

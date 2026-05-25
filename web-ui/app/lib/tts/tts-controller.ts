@@ -1,40 +1,30 @@
 /**
  * PC port of speech/src/main/java/me/rerere/tts/controller/TtsController.kt.
  *
- * Same product behavior as Android:
- *   - text is sliced via TextChunker (≤160 chars per chunk)
- *   - chunks are enqueued; a worker pulls one at a time, synthesizes via /api/tts/speech,
- *     plays the returned audio blob, then advances to the next
- *   - pause/resume/stop/skipNext/seekBy/setSpeed all controllable from UI
- *   - the next `prefetchCount` chunks are synthesized in parallel ahead of the playhead
- *     so the play queue stays primed (no audible gap between chunks)
- *   - a stable per-chunk cache (id → Promise<Blob>) lets us reuse already-synthesized audio
- *     if the user pauses and resumes mid-session, AND avoids re-billing the API for the
- *     same text. The big difference vs the old PC impl: if the user only listens to 1/10
- *     chunks then stops, the API was only billed for 1/10 of the text (plus prefetched
- *     ones already in-flight). The old "send the whole message in one shot" path billed
- *     for the whole thing regardless.
+ * Exact 1:1 replication of Android's architecture:
+ *   - TextChunker splits text (≤160 chars per chunk, split on punctuation/newlines)
+ *   - Worker loop: pull chunk from queue → await synthesis → play audio → advance
+ *   - Prefetch window of 4 chunks ahead (cache: chunkId → Promise<Blob>)
+ *   - Pause: set isPaused flag + audio.pause(); worker spins in delay(80) loop
+ *   - Resume: clear isPaused + audio.play(); worker exits spin naturally
+ *   - Stop: cancel everything, kill all audio, clear cache
+ *   - Speed: audio.playbackRate (applies immediately to current + future chunks)
+ *   - SeekBy: audio.currentTime += ms/1000 (within current chunk only)
+ *   - PlaybackState mirrors Android's exactly: positionMs/durationMs/speed/currentChunkIndex/totalChunks
  *
- * Translation notes (Kotlin → TypeScript):
- *   - StateFlow → tiny pub/sub subscribe()
- *   - Job (Kotlin coroutine) → an async loop guarded by `cancelRequested` + currentSessionId
- *     equality check; AbortController would also work but the polling-style cancel here
- *     keeps the code closer to the Kotlin shape (collectLatest + isActive)
- *   - kotlinx.coroutines.delay → setTimeout/Promise
- *   - Dispatchers.IO → just an async function (the synthesis fetch is naturally async)
- *   - audio playback uses HTMLAudioElement; speed/seek hooks straight into it
- *
- * One singleton per page — that's the same "app-scope TtsController" Android keeps in
- * LocalTTSState.
+ * All providers (system + online) now return audio bytes from the server. System TTS uses
+ * SetOutputToWaveFile on the server side (mirrors Android's synthesizeToFile), so the
+ * client treats all providers identically — no special-casing needed.
  */
 
-import type { PlaybackState, PlaybackStatus } from "./playback-state";
+import type { PlaybackState } from "./playback-state";
 import { initialPlaybackState } from "./playback-state";
 import { TextChunker, type TtsChunk } from "./text-chunker";
 import { appendWebAuthQuery } from "~/services/api";
 
 const PREFETCH_COUNT = 4;
-const CHUNK_DELAY_MS = 120; // tiny breather between chunks, matches Android's chunkDelayMs
+const CHUNK_DELAY_MS = 120;
+const POSITION_POLL_MS = 100;
 
 type Subscriber = (state: PlaybackState) => void;
 
@@ -46,61 +36,36 @@ interface PendingSynthesis {
 class TtsControllerImpl {
   private readonly chunker = new TextChunker(160);
 
-  /** Audio element used to actually emit sound. Recreated per chunk to avoid stale events. */
   private audio: HTMLAudioElement | null = null;
+  private aliveAudios = new Set<HTMLAudioElement>();
+  private activePlayReject: ((err: Error) => void) | null = null;
 
-  /** Current paused state — controls the worker loop. */
   private isPaused = false;
-
-  /** Pending queue (chunks not yet pulled by the worker). FIFO. */
   private queue: TtsChunk[] = [];
-
-  /** All chunks in this session — used by prefetch to know what's coming. */
   private allChunks: TtsChunk[] = [];
-
-  /** Cache: chunk.id → in-flight or settled synthesis. Survives pause/resume. */
   private cache = new Map<string, PendingSynthesis>();
-
-  /** Last index we've already prefetched up through. */
   private lastPrefetchedIndex = -1;
-
-  /** Bumps every speak(flush=true). Stale workers from a previous session detect this and exit. */
   private currentSessionId: string | null = null;
-
-  /** True while a worker loop is running. */
   private workerRunning = false;
 
-  /** Subscribers for state updates. */
-  private subscribers = new Set<Subscriber>();
+  /** 100ms position polling interval (mirrors Android's startPositionUpdates). */
+  private positionInterval: ReturnType<typeof setInterval> | null = null;
 
-  /** Latest published state. Read synchronously by getState(); pushed via notify(). */
+  private subscribers = new Set<Subscriber>();
   private state: PlaybackState = { ...initialPlaybackState };
 
   // ── public API ───────────────────────────────────────────────────────────
 
-  getState(): PlaybackState {
-    return this.state;
-  }
+  getState(): PlaybackState { return this.state; }
 
   subscribe(listener: Subscriber): () => void {
     this.subscribers.add(listener);
     listener(this.state);
-    return () => {
-      this.subscribers.delete(listener);
-    };
+    return () => { this.subscribers.delete(listener); };
   }
 
-  /**
-   * Speak `text`. With flush=true (the default) wipes any in-progress session and starts
-   * a fresh one; with flush=false appends to the current queue (Android calls this from
-   * the "继续朗读下一条" flow but PC doesn't expose that yet).
-   *
-   * `ownerKey` is opaque; the UI uses it to figure out "is THIS message the one currently
-   * being played" (compared against state.ownerKey).
-   */
   speak(text: string, ownerKey: string | null = null, flush = true) {
     if (!text.trim()) return;
-
     const newChunks = this.chunker.split(text);
     if (newChunks.length === 0) return;
 
@@ -125,201 +90,111 @@ class TtsControllerImpl {
       const remapped = newChunks.map((c, i) => ({ ...c, index: startIndex + i }));
       this.allChunks.push(...remapped);
       this.queue.push(...remapped);
-      this.updateState({ totalChunks: this.state.totalChunks + remapped.length });
+      this.updateState({ totalChunks: this.allChunks.length });
     }
 
-    // Kick off prefetch immediately and start the worker if it isn't already running.
-    this.prefetchFrom(this.state.currentChunkIndex);
-    if (!this.workerRunning) {
-      void this.runWorker();
-    }
+    this.prefetchFrom(0);
+    if (!this.workerRunning) void this.runWorker();
   }
 
   pause() {
     if (this.state.status !== "Playing" && this.state.status !== "Buffering") return;
     this.isPaused = true;
-    this.audio?.pause();
+    if (this.audio) try { this.audio.pause(); } catch { /* */ }
+    this.stopPositionUpdates();
     this.updateState({ status: "Paused" });
   }
 
   resume() {
     if (this.state.status !== "Paused") return;
     this.isPaused = false;
-    this.audio?.play().catch(() => { /* ignore — onerror handler will surface it */ });
-    this.updateState({ status: "Playing" });
+    if (this.audio && this.audio.readyState >= 2) {
+      this.audio.play().catch(() => { /* */ });
+      this.startPositionUpdates();
+      this.updateState({ status: "Playing" });
+    } else {
+      this.updateState({ status: "Buffering" });
+    }
   }
 
-  /** Stops + clears all session state. The play-bar disappears. */
   stop() {
+    void fetch(appendWebAuthQuery("/api/tts/cancel"), { method: "POST" }).catch(() => {});
     this.internalReset();
   }
 
-  /** Skip to next chunk. Doesn't interrupt the currently-playing one. */
-  skipNext() {
-    if (this.queue.length === 0) return;
-    this.queue.shift();
-    // totalChunks DOES include "just played", so we don't decrement it here — Android keeps
-    // the same semantics (totalChunks reflects the originally-loaded count).
-  }
-
-  /** Seek by ms within the current chunk. Negative goes back. */
   seekBy(ms: number) {
     if (!this.audio) return;
-    const next = Math.max(0, this.audio.currentTime + ms / 1000);
-    this.audio.currentTime = next;
+    this.audio.currentTime = Math.max(0, this.audio.currentTime + ms / 1000);
   }
 
-  /** Playback speed multiplier (0.5..3.0). */
   setSpeed(speed: number) {
     const clamped = Math.max(0.25, Math.min(4.0, speed));
     if (this.audio) this.audio.playbackRate = clamped;
     this.updateState({ speed: clamped });
   }
 
-  // ── internals ────────────────────────────────────────────────────────────
+  // ── worker loop (mirrors Android's startWorker coroutine) ────────────────
 
-  private internalReset() {
-    // Stop audio first so the onended/onerror handlers don't push stale state.
-    if (this.audio) {
-      this.audio.onended = null;
-      this.audio.onerror = null;
-      this.audio.ontimeupdate = null;
-      this.audio.onloadedmetadata = null;
-      try { this.audio.pause(); } catch { /* ignore */ }
-      this.audio.src = "";
-      this.audio = null;
-    }
-    this.isPaused = false;
-    this.queue = [];
-    this.allChunks = [];
-    for (const pending of this.cache.values()) {
-      try { pending.abort.abort(); } catch { /* ignore */ }
-    }
-    this.cache.clear();
-    this.lastPrefetchedIndex = -1;
-    this.currentSessionId = null;
-    this.workerRunning = false;
-    this.state = { ...initialPlaybackState };
-    this.notify();
-  }
-
-  private updateState(patch: Partial<PlaybackState>) {
-    this.state = { ...this.state, ...patch };
-    this.notify();
-  }
-
-  private notify() {
-    for (const subscriber of Array.from(this.subscribers)) {
-      try { subscriber(this.state); } catch { /* ignore subscriber errors */ }
-    }
-  }
-
-  /** Synthesize chunks [start, start+PREFETCH_COUNT) in parallel. Caches by chunk.id. */
-  private prefetchFrom(startIndex: number) {
-    const begin = Math.max(startIndex, this.lastPrefetchedIndex + 1);
-    const endExclusive = Math.min(begin + PREFETCH_COUNT, this.allChunks.length);
-    if (begin >= endExclusive) return;
-
-    for (let i = begin; i < endExclusive; i += 1) {
-      const chunk = this.allChunks[i];
-      if (!chunk) continue;
-      if (this.cache.has(chunk.id)) continue;
-      this.cache.set(chunk.id, this.synthesizeChunk(chunk));
-    }
-    this.lastPrefetchedIndex = endExclusive - 1;
-  }
-
-  /**
-   * Fire the /api/tts/speech call for a single chunk. Returns the audio Blob. The
-   * AbortController is used by internalReset() to cancel in-flight requests when the user
-   * presses stop, so the API isn't billed for chunks we no longer need.
-   */
-  private synthesizeChunk(chunk: TtsChunk): PendingSynthesis {
-    const abort = new AbortController();
-    const promise = (async () => {
-      const response = await fetch(appendWebAuthQuery("/api/tts/speech"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: chunk.text }),
-        signal: abort.signal,
-      });
-      if (!response.ok) {
-        const text = await response.text().catch(() => "");
-        throw new Error(`TTS synthesis failed: ${response.status} ${text.slice(0, 200)}`);
-      }
-      const contentType = response.headers.get("Content-Type") ?? "";
-      if (contentType.includes("application/json")) {
-        // System TTS path — the server already played the audio on-device; no blob to play.
-        // We treat this as an "empty" chunk and skip playback.
-        return new Blob([], { type: "audio/silence-marker" });
-      }
-      return await response.blob();
-    })();
-    return { promise, abort };
-  }
-
-  /** The main loop: dequeue → await synthesis → play → wait for end → repeat. */
   private async runWorker() {
     if (this.workerRunning) return;
     this.workerRunning = true;
-    const sessionId = this.currentSessionId;
-    let processedCount = this.state.currentChunkIndex;
+    const sessionId = this.currentSessionId!;
+    let processedCount = 0;
+
     try {
       while (true) {
-        // Session-id check — if reset() was called we abandon the loop.
         if (sessionId !== this.currentSessionId) break;
+
         if (this.isPaused) {
           await delay(80);
           continue;
         }
+
         const chunk = this.queue.shift();
         if (!chunk) break;
 
         processedCount += 1;
         this.updateState({
           currentChunkIndex: processedCount,
-          // totalChunks stays at the initial total (Android matches: totalChunks doesn't
-          // shrink as chunks are consumed; the play-bar shows "5 / 12" meaning chunk 5 of 12).
-          status: this.state.status === "Paused" ? "Paused" : "Buffering",
+          status: "Buffering",
+          positionMs: 0,
+          durationMs: 0,
         });
 
-        // Trigger prefetch for the next window.
         this.prefetchFrom(chunk.index + 1);
 
+        // Await synthesis
         let blob: Blob;
         try {
           blob = await this.awaitOrCreate(chunk);
         } catch (err) {
           if (sessionId !== this.currentSessionId) break;
           const msg = err instanceof Error ? err.message : String(err);
+          if (msg === "TTS reset") break;
           this.updateState({ status: "Error", errorMessage: msg });
           continue;
         }
 
         if (sessionId !== this.currentSessionId) break;
+        if (blob.size === 0) continue;
 
-        // System-TTS empty-marker blob: server already spoke on-device, skip playback.
-        if (blob.type === "audio/silence-marker") {
-          if (this.queue.length > 0) await delay(CHUNK_DELAY_MS);
-          continue;
-        }
-
+        // Play audio (suspends until ended, like Android's audio.play(response))
         try {
-          await this.playBlob(blob);
+          await this.playBlob(blob, sessionId);
         } catch (err) {
           if (sessionId !== this.currentSessionId) break;
           const msg = err instanceof Error ? err.message : String(err);
+          if (msg === "TTS reset") break;
           this.updateState({ status: "Error", errorMessage: msg });
         }
 
+        if (sessionId !== this.currentSessionId) break;
         if (this.queue.length > 0) await delay(CHUNK_DELAY_MS);
       }
     } finally {
       this.workerRunning = false;
       if (sessionId === this.currentSessionId && this.queue.length === 0) {
-        // Natural end-of-queue.
         this.updateState({ status: "Ended" });
-        // Auto-clear after a short delay so the play-bar fades out.
         setTimeout(() => {
           if (this.state.status === "Ended" && sessionId === this.currentSessionId) {
             this.internalReset();
@@ -327,6 +202,67 @@ class TtsControllerImpl {
         }, 800);
       }
     }
+  }
+
+  // ── internals ────────────────────────────────────────────────────────────
+
+  private internalReset() {
+    this.currentSessionId = null;
+
+    if (this.activePlayReject) {
+      const rej = this.activePlayReject;
+      this.activePlayReject = null;
+      try { rej(new Error("TTS reset")); } catch { /* */ }
+    }
+
+    for (const audio of Array.from(this.aliveAudios)) {
+      try { audio.pause(); audio.src = ""; } catch { /* */ }
+    }
+    this.aliveAudios.clear();
+    this.audio = null;
+
+    this.stopPositionUpdates();
+    this.isPaused = false;
+    this.queue = [];
+    this.allChunks = [];
+    for (const pending of this.cache.values()) {
+      try { pending.abort.abort(); } catch { /* */ }
+    }
+    this.cache.clear();
+    this.lastPrefetchedIndex = -1;
+    this.state = { ...initialPlaybackState };
+    this.notify();
+  }
+
+  private prefetchFrom(startIndex: number) {
+    const begin = Math.max(startIndex, this.lastPrefetchedIndex + 1);
+    const endExclusive = Math.min(begin + PREFETCH_COUNT, this.allChunks.length);
+    if (begin >= endExclusive) return;
+    for (let i = begin; i < endExclusive; i += 1) {
+      const chunk = this.allChunks[i];
+      if (!chunk || this.cache.has(chunk.id)) continue;
+      this.cache.set(chunk.id, this.synthesizeChunk(chunk));
+    }
+    this.lastPrefetchedIndex = endExclusive - 1;
+  }
+
+  private synthesizeChunk(chunk: TtsChunk): PendingSynthesis {
+    const abort = new AbortController();
+    const speed = this.state.speed;
+    const promise = (async () => {
+      const response = await fetch(appendWebAuthQuery("/api/tts/speech"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: chunk.text, speed }),
+        signal: abort.signal,
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(`TTS: ${response.status} ${text.slice(0, 200)}`);
+      }
+      return await response.blob();
+    })();
+    return { promise, abort };
   }
 
   private async awaitOrCreate(chunk: TtsChunk): Promise<Blob> {
@@ -338,45 +274,79 @@ class TtsControllerImpl {
     return await pending.promise;
   }
 
-  /** Play a single chunk's audio blob; resolves when it finishes (or rejects on error). */
-  private playBlob(blob: Blob): Promise<void> {
+  private playBlob(blob: Blob, sessionId: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       audio.playbackRate = this.state.speed;
       this.audio = audio;
+      this.aliveAudios.add(audio);
+
+      const cleanup = () => {
+        this.stopPositionUpdates();
+        URL.revokeObjectURL(url);
+        this.aliveAudios.delete(audio);
+        if (this.audio === audio) this.audio = null;
+        this.activePlayReject = null;
+      };
+
+      this.activePlayReject = (err) => {
+        try { audio.pause(); audio.src = ""; } catch { /* */ }
+        cleanup();
+        reject(err);
+      };
 
       audio.onloadedmetadata = () => {
-        if (this.audio === audio) {
-          this.updateState({ durationMs: Number.isFinite(audio.duration) ? audio.duration * 1000 : 0, positionMs: 0 });
-        }
+        if (this.audio !== audio) return;
+        const dur = Number.isFinite(audio.duration) ? audio.duration * 1000 : 0;
+        this.updateState({ durationMs: dur, positionMs: 0 });
       };
-      audio.ontimeupdate = () => {
-        if (this.audio === audio) {
-          this.updateState({ positionMs: audio.currentTime * 1000 });
-        }
-      };
+
       audio.onended = () => {
-        if (this.audio === audio) {
-          URL.revokeObjectURL(url);
-          this.audio = null;
-          resolve();
-        }
+        cleanup();
+        resolve();
       };
+
       audio.onerror = () => {
-        URL.revokeObjectURL(url);
-        if (this.audio === audio) this.audio = null;
+        cleanup();
         reject(new Error("Audio playback error"));
       };
 
-      // Push the Playing state right before calling play() so the UI is in sync.
       this.updateState({ status: "Playing" });
+      this.startPositionUpdates();
       audio.play().catch((err) => {
-        URL.revokeObjectURL(url);
-        if (this.audio === audio) this.audio = null;
+        cleanup();
         reject(err);
       });
     });
+  }
+
+  private startPositionUpdates() {
+    this.stopPositionUpdates();
+    this.positionInterval = setInterval(() => {
+      if (!this.audio) return;
+      const pos = this.audio.currentTime * 1000;
+      const dur = Number.isFinite(this.audio.duration) ? this.audio.duration * 1000 : this.state.durationMs;
+      this.updateState({ positionMs: pos, durationMs: dur });
+    }, POSITION_POLL_MS);
+  }
+
+  private stopPositionUpdates() {
+    if (this.positionInterval != null) {
+      clearInterval(this.positionInterval);
+      this.positionInterval = null;
+    }
+  }
+
+  private updateState(patch: Partial<PlaybackState>) {
+    this.state = { ...this.state, ...patch };
+    this.notify();
+  }
+
+  private notify() {
+    for (const sub of Array.from(this.subscribers)) {
+      try { sub(this.state); } catch { /* */ }
+    }
   }
 }
 
@@ -384,19 +354,13 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// One singleton per page. Mirrors Android's app-scope `LocalTTSState` / single
-// `TtsController` injected by Koin.
 export const ttsController = new TtsControllerImpl();
 
-// React subscription hook — usable from any component that wants to render the play bar
-// or react to the "is THIS message the one playing" check.
 import * as React from "react";
 
 export function useTtsPlaybackState(): PlaybackState {
   const [state, setState] = React.useState<PlaybackState>(() => ttsController.getState());
-  React.useEffect(() => {
-    return ttsController.subscribe(setState);
-  }, []);
+  React.useEffect(() => ttsController.subscribe(setState), []);
   return state;
 }
 

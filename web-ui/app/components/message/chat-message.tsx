@@ -521,11 +521,17 @@ const ChatMessageActionsRow = React.memo(({
   // when the cleanup fires).
   React.useEffect(() => {
     return () => {
+      // Stop the legacy single-blob playback (browser SpeechSynthesis / one-shot Audio)
+      // because that path can't survive a re-render anyway.
       if (getAudioPlaybackKey() === message.id) stopAudio();
-      // Also tear down chunked TTS if this message owns the active session. Without this a
-      // virtualized list scroll that unmounts the speaking row would leave the controller
-      // running with no UI to control it.
-      if (ttsController.getState().ownerKey === message.id) ttsController.stop();
+      // INTENTIONALLY do NOT tear down ttsController here. The chunked playback singleton
+      // lives at app scope and the floating TtsPlayBar is the user's "stop" control.
+      // Tearing it down on row unmount caused two user-visible bugs:
+      //   - the last chunk of a long message would get cut off when the virtualized list
+      //     scrolled the row off-screen mid-playback
+      //   - switching to another conversation killed playback the user wanted to keep
+      // The bar stays visible regardless of which row is mounted; users explicitly stop
+      // via its ✕ button.
     };
   }, [message.id]);
 

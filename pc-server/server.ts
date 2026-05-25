@@ -736,11 +736,6 @@ function defaultSettings(): Settings {
       chatFontFamily: "",
       uiFontFamilyCss: "\"Noto Sans SC\", \"Microsoft YaHei\", sans-serif",
       chatFontFamilyCss: "",
-      // Font sizes in px applied via CSS custom properties (--rikkahub-ui-font-size and
-      // --rikkahub-chat-font-size). Default 14 (UI) and 16 (chat) match the original
-      // body/message-bubble defaults; the user-facing settings slider runs 12–22 px.
-      uiFontSize: 14,
-      chatFontSize: 16,
       autoCloseThinking: true,
       codeBlockAutoWrap: false,
       codeBlockAutoCollapse: false,
@@ -918,17 +913,6 @@ function normalizeState(input: Partial<State>): State {
     normalized.settings.displaySetting.uiFontFamily = defaults.displaySetting.uiFontFamily;
     normalized.settings.displaySetting.uiFontFamilyCss = defaults.displaySetting.uiFontFamilyCss;
   }
-  // Backfill font-size fields for installs created before this setting was added. Coerce
-  // anything non-numeric to the default and clamp to a sane range so a corrupted state.json
-  // can't push the whole UI to 200px and lock the user out.
-  const fontSizeUi = Number(normalized.settings.displaySetting.uiFontSize);
-  normalized.settings.displaySetting.uiFontSize = Number.isFinite(fontSizeUi) && fontSizeUi > 0
-    ? Math.max(10, Math.min(28, fontSizeUi))
-    : Number(defaults.displaySetting.uiFontSize);
-  const fontSizeChat = Number(normalized.settings.displaySetting.chatFontSize);
-  normalized.settings.displaySetting.chatFontSize = Number.isFinite(fontSizeChat) && fontSizeChat > 0
-    ? Math.max(10, Math.min(28, fontSizeChat))
-    : Number(defaults.displaySetting.chatFontSize);
   normalized.settings.titlePrompt = normalized.settings.titlePrompt || DEFAULT_TITLE_PROMPT;
   normalized.settings.translatePrompt = normalized.settings.translatePrompt || DEFAULT_TRANSLATION_PROMPT;
   normalized.settings.suggestionPrompt = normalized.settings.suggestionPrompt || DEFAULT_SUGGESTION_PROMPT;
@@ -2435,9 +2419,16 @@ function backupPayloadMetadataOnly() {
     version: 2,
     app: "RikkaHub PC",
     exportedAt: new Date().toISOString(),
-    state,
+    // Exclude conversations from pc-backup.json — they're exported as rikka_hub.db now.
+    // Including them here caused OOM crashes for users with large imported Android histories.
+    state: {
+      settings: state.settings,
+      generatedImages: state.generatedImages,
+      logs: state.logs.slice(-200),
+      files: state.files,
+      memories: state.memories,
+    },
     skills: exportSkills(),
-    // `data` deliberately omitted; consumer pairs this with `upload/<fileName>` entries.
     files: state.files.map((file) => ({
       id: file.id,
       path: file.path,
@@ -2519,6 +2510,17 @@ function applyPcBackupFromExtractDir(extractDir: string, pcBackupPath: string): 
     if (Array.isArray(incoming.conversations)) {
       conversationsImported = incoming.conversations.length;
     }
+    // If pc-backup.json doesn't contain conversations (new format), try rikka_hub.db
+    if (!conversationsImported) {
+      const dbFile = join(extractDir, "rikka_hub.db");
+      if (existsSync(dbFile)) {
+        try {
+          conversationsImported = importAndroidConversations(extractDir, dbFile, new Map());
+        } catch (dbErr) {
+          console.warn("[import] rikka_hub.db read failed in PC restore:", dbErr);
+        }
+      }
+    }
     importSkills((body as { skills?: unknown }).skills);
     // Re-link file bytes from upload/<fileName>. We trust the metadata in pc-backup.json's
     // files[] array for mime/extractedText etc., but assign new local ids and paths.
@@ -2574,8 +2576,10 @@ function applyAndroidZipBackupFromPath(zipPath: string): { settingsImported: boo
   const extractDir = join(tmpRoot, "extracted");
   rmSync(extractDir, { recursive: true, force: true });
   mkdirSync(extractDir, { recursive: true });
-  // PowerShell quoting on Windows is finicky; use simple paths under our temp dir.
-  const script = `Expand-Archive -LiteralPath '${zipPath.replace(/'/g, "''")}' -DestinationPath '${extractDir.replace(/'/g, "''")}' -Force`;
+  const script = [
+    "Add-Type -AssemblyName System.IO.Compression.FileSystem",
+    `[System.IO.Compression.ZipFile]::ExtractToDirectory('${zipPath.replace(/'/g, "''")}', '${extractDir.replace(/'/g, "''")}')`,
+  ].join("; ");
   const proc = Bun.spawnSync(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script]);
   if (proc.exitCode !== 0) {
     throw new Error(`Failed to extract Android backup zip: ${new TextDecoder().decode(proc.stderr ?? new Uint8Array()).slice(0, 300)}`);
@@ -2605,7 +2609,12 @@ function applyAndroidZipBackupFromPath(zipPath: string): { settingsImported: boo
       // through normalizeState's defaults. The spread also carries through unknown keys
       // (mcpServers, modeInjections, lorebooks, quickMessages) since TS types are erased at
       // runtime, so those settings round-trip without explicit mapping.
-      state = normalizeState({ ...state, settings: { ...state.settings, ...raw } as State["settings"] });
+      // Avatar type strings come in as Android FQNs; rewrite them back to PC's short form
+      // (dummy/emoji/image) so the UI code paths that branch on type === "dummy" etc.
+      // keep working.
+      const merged = { ...state.settings, ...raw } as State["settings"];
+      const adjusted = rewriteAvatarsInSettings(merged, ANDROID_AVATAR_TYPE_TO_PC);
+      state = normalizeState({ ...state, settings: adjusted as State["settings"] });
       settingsImported = true;
     } catch (err) {
       console.warn("[import] failed to parse Android settings.json", err);
@@ -2652,6 +2661,16 @@ function applyAndroidZipBackupFromPath(zipPath: string): { settingsImported: boo
   if (existsSync(dbPath)) {
     try {
       conversationsImported = importAndroidConversations(extractDir, dbPath, androidFilenameToPcId);
+      // Keep a copy of the original Android db for re-export. Open it first to
+      // checkpoint any WAL data (Android exports with WAL that may contain schema
+      // updates like identity_hash changes), then serialize the consolidated db.
+      const cachedDbPath = join(dataDir, "rikka_hub_cached.db");
+      try {
+        const cacheDb = new Database(dbPath, { readonly: true });
+        const bytes = cacheDb.serialize();
+        cacheDb.close();
+        writeFileSync(cachedDbPath, bytes);
+      } catch { /* best-effort */ }
     } catch (err) {
       dbReadError = err instanceof Error ? err.message : String(err);
       console.warn("[import] failed to read Android SQLite database:", dbReadError);
@@ -2887,7 +2906,13 @@ async function webDavRequest(config: WebDavConfig, method: string, fileName = ""
     ...webDavAuthHeader(config),
     ...(init.headers as Record<string, string> | undefined ?? {}),
   };
-  return fetch(webDavUrl(config, fileName), { ...init, method, headers });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  try {
+    return await fetch(webDavUrl(config, fileName), { ...init, method, headers, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function webDavEnsureCollection(config: WebDavConfig) {
@@ -2921,6 +2946,157 @@ async function webDavEnsureCollection(config: WebDavConfig) {
 //   upload/<fileName>      ← raw file bytes for each state.files[]
 //   skills/<name>/<...>    ← recursive copy of context.filesDir/skills/
 //   (rikka_hub.db is intentionally absent — PC has no SQLite db.)
+
+// kotlinx.serialization uses the FQN of @Serializable subclasses as the polymorphic
+// discriminator value (no @SerialName annotation on Avatar.Dummy / Emoji / Image, so the
+// FQN is the default). PC internally uses short names — "dummy"/"emoji"/"image" — for
+// brevity in the UI code paths. When we hand off settings.json to Android we must rewrite
+// the avatar.type field to the FQN form, otherwise Android's BackupVM crashes with
+// "Serializer for subclass 'dummy' is not found in the polymorphic scope of 'Avatar'".
+// Same transform is applied in reverse when we import an Android-origin settings.json.
+const PC_AVATAR_TYPE_TO_ANDROID: Record<string, string> = {
+  dummy: "me.rerere.rikkahub.data.model.Avatar.Dummy",
+  emoji: "me.rerere.rikkahub.data.model.Avatar.Emoji",
+  image: "me.rerere.rikkahub.data.model.Avatar.Image",
+  url: "me.rerere.rikkahub.data.model.Avatar.Image",
+};
+const ANDROID_AVATAR_TYPE_TO_PC: Record<string, string> = Object.fromEntries(
+  Object.entries(PC_AVATAR_TYPE_TO_ANDROID).map(([pc, android]) => [android, pc]),
+);
+
+function mapAvatarType(value: JsonValue, mapping: Record<string, string>): JsonValue {
+  if (!isRecord(value)) return value;
+  const type = String(value.type ?? "");
+  if (!type || !mapping[type]) return value;
+  return { ...value, type: mapping[type] };
+}
+
+/** Deep-copy a Settings record with every avatar field rewritten through `mapping`.
+ *  Mutates a clone, doesn't touch the caller's value. Targets the two known avatar
+ *  locations: per-assistant avatars and displaySetting.userAvatar.
+ *  Also strips PC-only fields that would cause Android deserialization errors. */
+function rewriteAvatarsInSettings(settings: any, mapping: Record<string, string>): any {
+  if (!isRecord(settings)) return settings;
+  const copy: any = { ...settings };
+  if (Array.isArray(copy.assistants)) {
+    copy.assistants = copy.assistants.map((a: any) => {
+      if (!isRecord(a)) return a;
+      const fixed: any = { ...a };
+      if (fixed.avatar) fixed.avatar = mapAvatarType(fixed.avatar, mapping);
+      // reasoningLevel: PC uses "AUTO", Android expects "auto"
+      if (typeof fixed.reasoningLevel === "string") fixed.reasoningLevel = fixed.reasoningLevel.toLowerCase();
+      // presetMessages role: PC uses "USER"/"ASSISTANT", Android expects "user"/"assistant"
+      if (Array.isArray(fixed.presetMessages)) {
+        fixed.presetMessages = fixed.presetMessages.map((pm: any) =>
+          isRecord(pm) && typeof pm.role === "string" ? { ...pm, role: pm.role.toLowerCase() } : pm,
+        );
+      }
+      // Strip PC-only assistant fields that Android doesn't have
+      delete fixed.mcpToolOverrides;
+      delete fixed.allowConversationSystemPrompt;
+      return fixed;
+    });
+  }
+  // modeInjections role: PC uses "USER", Android expects "user"
+  if (Array.isArray(copy.modeInjections)) {
+    copy.modeInjections = copy.modeInjections.map((mi: any) =>
+      isRecord(mi) && typeof mi.role === "string" ? { ...mi, role: mi.role.toLowerCase() } : mi,
+    );
+  }
+  if (isRecord(copy.displaySetting)) {
+    const displaySetting = { ...(copy.displaySetting as Record<string, JsonValue>) };
+    if (displaySetting.userAvatar) {
+      displaySetting.userAvatar = mapAvatarType(displaySetting.userAvatar, mapping);
+    }
+    // Strip PC-only displaySetting fields that Android can't deserialize:
+    // - chatFontFamily: PC uses "" (empty string) which isn't a valid Android enum value
+    // - chatFontFamilyCss: PC-only CSS field
+    // - uiFontSize / chatFontSize: PC-only font size fields
+    const pcOnlyDisplayFields = ["chatFontFamily", "chatFontFamilyCss", "uiFontSize", "chatFontSize"];
+    for (const field of pcOnlyDisplayFields) {
+      if (field in displaySetting) delete displaySetting[field];
+    }
+    copy.displaySetting = displaySetting;
+  }
+  // Strip PC-only top-level fields
+  delete copy.proxyConfig;
+  // Fix empty-string UUID fields — Android's Uuid deserializer rejects ""
+  const uuidFields = ["chatModelId", "titleModelId", "translateModeId", "suggestionModelId", "imageGenerationModelId", "ocrModelId", "compressModelId", "assistantId", "selectedTTSProviderId", "selectedASRProviderId"];
+  for (const field of uuidFields) {
+    if (field in copy && (copy[field] === "" || copy[field] === null || copy[field] === undefined)) {
+      copy[field] = crypto.randomUUID();
+    }
+  }
+  return copy;
+}
+
+/** Generate a Room-compatible SQLite database from PC's conversation data so Android can
+ *  restore chat history from a PC-origin backup zip. The schema matches Android's
+ *  rikka_hub.db exactly (ConversationEntity + message_node + room_master_table). */
+function generateRikkaHubDb(dbPath: string): boolean {
+  const cachedDbPath = join(dataDir, "rikka_hub_cached.db");
+  if (!existsSync(cachedDbPath)) return false;
+  try {
+    const cachedDb = new Database(cachedDbPath, { readonly: true });
+    const schemaRows = cachedDb.query("SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY CASE type WHEN 'table' THEN 1 WHEN 'index' THEN 2 ELSE 3 END, name").all() as any[];
+    const uv = (cachedDb.query("PRAGMA user_version").get() as any)?.user_version ?? 18;
+    const roomRows = cachedDb.query("SELECT id, identity_hash FROM room_master_table").all() as any[];
+    const metaRows = cachedDb.query("SELECT locale FROM android_metadata").all() as any[];
+    cachedDb.close();
+    const db = new Database(":memory:");
+    db.exec(`PRAGMA user_version = ${uv}`);
+    for (const row of schemaRows) {
+      if (row.name === 'android_metadata' || row.name === 'room_master_table') {
+        try { db.exec(row.sql); } catch { /* */ }
+      }
+    }
+    for (const m of metaRows) { try { db.exec(`INSERT INTO android_metadata VALUES ('${m.locale}')`); } catch { /* */ } }
+    for (const r of roomRows as any[]) { try { db.exec(`INSERT INTO room_master_table VALUES (${r.id}, '${r.identity_hash}')`); } catch { /* */ } }
+    for (const row of schemaRows) {
+      if (row.name === 'android_metadata' || row.name === 'room_master_table') continue;
+      if (row.name?.startsWith('sqlite_')) continue;
+      try { db.exec(row.sql); } catch { /* */ }
+    }
+    insertConversationsIntoDb(db);
+    writeFileSync(dbPath, db.serialize());
+    db.close();
+    return true;
+  } catch (err) {
+    console.warn("[backup] cached db schema read failed:", err);
+    return false;
+  }
+}
+
+function insertConversationsIntoDb(db: InstanceType<typeof Database>) {
+  const insertConv = db.prepare("INSERT OR REPLACE INTO ConversationEntity (id, assistant_id, title, nodes, create_at, update_at, suggestions, is_pinned) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+  const insertNode = db.prepare("INSERT OR REPLACE INTO message_node (id, conversation_id, node_index, messages, select_index) VALUES (?, ?, ?, ?, ?)");
+  const txn = db.transaction(() => {
+    for (const conv of state.conversations) {
+      try {
+        insertConv.run(conv.id, conv.assistantId || "0950e2dc-9bd5-4801-afa3-aa887aa36b4e", conv.title || "", "[]", conv.createAt || Date.now(), conv.updateAt || Date.now(), JSON.stringify(conv.chatSuggestions || []), conv.isPinned ? 1 : 0);
+        for (let i = 0; i < (conv.messages || []).length; i++) {
+          const node = conv.messages[i];
+          if (!node?.id) continue;
+          const toLocalDt = (v: any) => typeof v === "string" ? v.replace(/Z$/, "").replace(/[+-]\d{2}:\d{2}$/, "") : v;
+          const toInstant = (v: any) => typeof v === "string" && v && !v.endsWith("Z") && !/[+-]\d{2}:\d{2}$/.test(v) ? v + "Z" : v;
+          const fixParts = (parts: any[]) => parts.map((p: any) => {
+            if (!p || typeof p !== "object") return p;
+            const fixed = { ...p };
+            if (fixed.createdAt) fixed.createdAt = toInstant(fixed.createdAt);
+            if (fixed.finishedAt) fixed.finishedAt = toInstant(fixed.finishedAt);
+            return fixed;
+          });
+          const msgs = (node.messages || []).map((m: any) => ({ id: m.id || null, role: String(m.role || "user").toLowerCase(), parts: fixParts(m.parts || []), annotations: m.annotations || [], createdAt: toLocalDt(m.createdAt), finishedAt: toLocalDt(m.finishedAt), modelId: m.modelId || null, usage: m.usage || null, translation: m.translation || null }));
+          insertNode.run(node.id, conv.id, i, JSON.stringify(msgs), node.selectIndex ?? 0);
+        }
+      } catch (err) { console.warn(`[backup] skipping conversation ${conv.id}: ${err}`); }
+    }
+  });
+  txn();
+}
+
+
+
 function createSettingsBackupZip(): Buffer {
   const tmpRoot = join(process.env.TEMP ?? process.env.TMP ?? dataDir, `rikkahub-backup-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const stageDir = join(tmpRoot, "stage");
@@ -2930,13 +3106,42 @@ function createSettingsBackupZip(): Buffer {
     // so PC-only fields are tolerated. PC's state.settings is structurally aligned with
     // Android's Settings class (this is a port). Fields Android doesn't recognize fall through
     // to defaults, which matches what happens when you restore a PC-origin backup to Android.
-    writeFileSync(join(stageDir, "settings.json"), JSON.stringify(state.settings, null, 2));
+    // Rewrite PC's short avatar.type strings into Android's FQN form so the manifest
+    // parses cleanly on the phone. PC's own pc-backup.json keeps the short form (we
+    // round-trip it through our normalize logic).
+    writeFileSync(
+      join(stageDir, "settings.json"),
+      JSON.stringify(rewriteAvatarsInSettings(state.settings, PC_AVATAR_TYPE_TO_ANDROID), null, 2),
+    );
 
     // pc-backup.json — full PC state for lossless self-restore. Critically, this does NOT
     // contain file byte data (`backupPayloadMetadataOnly()` strips it); the bytes live in
     // upload/<fileName> entries below and get re-linked during restoreFromPcBackupExtractDir.
     // Without this separation a user with multi-GB of attachments would OOM on JSON.stringify.
     writeFileSync(join(stageDir, "pc-backup.json"), JSON.stringify(backupPayloadMetadataOnly(), null, 2));
+    // Generate rikka_hub.db so Android can restore conversations. PC stores conversations
+    // in state.json; Android stores them in a Room SQLite database. We create a compatible
+    // db from PC's conversation data so the zip is fully restorable on the phone.
+    let dbGenerated = false;
+    if (state.conversations.length > 0) {
+      const dbPath = join(stageDir, "rikka_hub.db");
+      try {
+        dbGenerated = generateRikkaHubDb(dbPath);
+      } catch (dbErr) {
+        console.error("[backup] generateRikkaHubDb failed:", dbErr);
+        if (existsSync(dbPath)) try { rmSync(dbPath); } catch { /* */ }
+      }
+      if (dbGenerated) {
+        for (const suffix of ["-wal", "-shm", "-journal"]) {
+          const p = dbPath + suffix;
+          if (existsSync(p)) try { rmSync(p); } catch { /* */ }
+        }
+        writeFileSync(join(stageDir, "rikka_hub-wal"), Buffer.alloc(0));
+        writeFileSync(join(stageDir, "rikka_hub-shm"), Buffer.alloc(0));
+      } else {
+        if (existsSync(dbPath)) try { rmSync(dbPath); } catch { /* */ }
+      }
+    }
 
     // upload/<displayName> — Android writes one entry per uploaded file under FileFolders.UPLOAD,
     // keyed by the file's display name. PC stores files on disk as `<numericId>.<ext>` but tracks
@@ -2984,9 +3189,10 @@ function createSettingsBackupZip(): Buffer {
     }
 
     const zipPath = join(tmpRoot, "backup.zip");
-    // `\\*` so Compress-Archive zips the directory CONTENTS rather than the stage dir itself —
-    // we want the zip root to be `settings.json` / `upload/` / `skills/`, matching Android.
-    const script = `Compress-Archive -Path '${stageDir.replace(/'/g, "''")}\\*' -DestinationPath '${zipPath.replace(/'/g, "''")}' -Force`;
+    const script = [
+      "Add-Type -AssemblyName System.IO.Compression.FileSystem",
+      `[System.IO.Compression.ZipFile]::CreateFromDirectory('${stageDir.replace(/'/g, "''")}', '${zipPath.replace(/'/g, "''")}')`,
+    ].join("; ");
     const proc = Bun.spawnSync(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script]);
     if (proc.exitCode !== 0) {
       throw new Error(`Failed to create backup zip: ${new TextDecoder().decode(proc.stderr ?? new Uint8Array()).slice(0, 300)}`);
@@ -3006,8 +3212,35 @@ function createSettingsBackupZipToPath(targetZipPath: string): number {
   const stageDir = join(tmpRoot, "stage");
   mkdirSync(stageDir, { recursive: true });
   try {
-    writeFileSync(join(stageDir, "settings.json"), JSON.stringify(state.settings, null, 2));
-    writeFileSync(join(stageDir, "pc-backup.json"), JSON.stringify(backupPayloadMetadataOnly(), null, 2));
+    console.log(`[backup] staging settings.json...`);
+    writeFileSync(
+      join(stageDir, "settings.json"),
+      safeJsonStringify(rewriteAvatarsInSettings(state.settings, PC_AVATAR_TYPE_TO_ANDROID)),
+    );
+    console.log(`[backup] staging pc-backup.json...`);
+    writeFileSync(join(stageDir, "pc-backup.json"), safeJsonStringify(backupPayloadMetadataOnly()));
+    // Generate rikka_hub.db so Android can restore conversations. PC stores conversations
+    // in state.json; Android stores them in a Room SQLite database. We create a compatible
+    // db from PC's conversation data so the zip is fully restorable on the phone.
+    if (state.conversations.length > 0) {
+      const dbPath = join(stageDir, "rikka_hub.db");
+      try {
+        const ok = generateRikkaHubDb(dbPath);
+        if (ok) {
+          for (const suffix of ["-wal", "-shm", "-journal"]) {
+            const p = dbPath + suffix;
+            if (existsSync(p)) try { rmSync(p); } catch { /* */ }
+          }
+          writeFileSync(join(stageDir, "rikka_hub-wal"), Buffer.alloc(0));
+          writeFileSync(join(stageDir, "rikka_hub-shm"), Buffer.alloc(0));
+        } else {
+          if (existsSync(dbPath)) try { rmSync(dbPath); } catch { /* */ }
+        }
+      } catch (dbErr) {
+        console.error("[backup] generateRikkaHubDb failed:", dbErr);
+        if (existsSync(dbPath)) try { rmSync(dbPath); } catch { /* */ }
+      }
+    }
     if (state.files.length > 0) {
       const uploadStage = join(stageDir, "upload");
       mkdirSync(uploadStage, { recursive: true });
@@ -3033,10 +3266,24 @@ function createSettingsBackupZipToPath(targetZipPath: string): number {
       mkdirSync(skillsStage, { recursive: true });
       copyDirRecursive(skillsDir, skillsStage);
     }
-    const script = `Compress-Archive -Path '${stageDir.replace(/'/g, "''")}\\*' -DestinationPath '${targetZipPath.replace(/'/g, "''")}' -Force`;
-    const proc = Bun.spawnSync(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script]);
+    // Use .NET System.IO.Compression directly (available on all Windows 10+ without needing
+    // the PowerShell Archive module which is missing on some Win11 installs). This is more
+    // reliable than Compress-Archive and works with both powershell.exe 5.1 and pwsh 7+.
+    if (existsSync(targetZipPath)) rmSync(targetZipPath);
+    const script = [
+      "Add-Type -AssemblyName System.IO.Compression.FileSystem",
+      `[System.IO.Compression.ZipFile]::CreateFromDirectory('${stageDir.replace(/'/g, "''")}', '${targetZipPath.replace(/'/g, "''")}')`,
+    ].join("; ");
+    console.log(`[backup] creating zip from ${stageDir} → ${targetZipPath} (${readdirSync(stageDir).join(", ")})`);
+    const proc = Bun.spawnSync(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], { timeout: 120_000 });
     if (proc.exitCode !== 0) {
-      throw new Error(`Failed to create backup zip: ${new TextDecoder().decode(proc.stderr ?? new Uint8Array()).slice(0, 300)}`);
+      const stderr = new TextDecoder().decode(proc.stderr ?? new Uint8Array()).slice(0, 500);
+      const stdout = new TextDecoder().decode(proc.stdout ?? new Uint8Array()).slice(0, 200);
+      console.error("[backup] zip creation failed, exit:", proc.exitCode, "stderr:", stderr, "stdout:", stdout);
+      throw new Error(`Zip creation failed (exit ${proc.exitCode}): ${stderr || stdout || "unknown error"}`);
+    }
+    if (!existsSync(targetZipPath)) {
+      throw new Error("Zip file was not created (file missing after PowerShell exited 0)");
     }
     return statSync(targetZipPath).size;
   } finally {
@@ -3066,9 +3313,63 @@ function restoreBackupBuffer(buffer: Buffer, fileName: string): void {
   applyBackupPayload(JSON.parse(buffer.toString("utf-8")));
 }
 
+function safeJsonStringify(value: unknown): string {
+  const seen = new WeakSet();
+  return JSON.stringify(value, (_key, val) => {
+    if (typeof val === "bigint") return Number(val);
+    if (val !== null && typeof val === "object") {
+      if (seen.has(val)) return undefined;
+      seen.add(val);
+    }
+    return val;
+  }, 2);
+}
+
 function backupStamp(): string {
   // Match Android's DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss") so the filename stamp lines up.
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "_");
+}
+
+/** Stream an HTTP response body to a temp file (no in-JS-memory buffering) and route the
+ *  saved file through applyAndroidZipBackupFromPath / applyBackupPayload as appropriate.
+ *  Used by s3Restore + webDavRestore. Mirrors the local data/import streaming-path so
+ *  multi-GB backups can be restored from cloud the same way they can from a local picker. */
+async function streamResponseToTempAndRestore(response: Response, fileName: string): Promise<void> {
+  const tmpRoot = join(process.env.TEMP ?? process.env.TMP ?? dataDir, `rikkahub-restore-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  mkdirSync(tmpRoot, { recursive: true });
+  // PowerShell's Expand-Archive checks the extension, so anything that isn't `.zip` we
+  // still save as such (the magic-byte check below decides what to do with it).
+  const sanitized = fileName.replace(/[^A-Za-z0-9._\-]/g, "_") || "backup.zip";
+  const onDiskName = sanitized.toLowerCase().endsWith(".zip") || sanitized.toLowerCase().endsWith(".json")
+    ? sanitized
+    : `${sanitized}.zip`;
+  const onDiskPath = join(tmpRoot, onDiskName);
+  try {
+    const body = response.body;
+    if (!body) throw new Error("Empty response body");
+    const writer = Bun.file(onDiskPath).writer();
+    const reader = body.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        writer.write(value);
+      }
+    } finally {
+      await writer.end();
+    }
+    // Detect zip vs json from first 4 bytes — same trick the local-import endpoint uses.
+    const magic = new Uint8Array(await Bun.file(onDiskPath).slice(0, 4).arrayBuffer());
+    const isZip = magic.length >= 4 && magic[0] === 0x50 && magic[1] === 0x4B && magic[2] === 0x03 && magic[3] === 0x04;
+    if (isZip) {
+      applyAndroidZipBackupFromPath(onDiskPath);
+    } else {
+      // Legacy JSON backup. These are tiny (KB-MB), so reading them into memory is fine.
+      applyBackupPayload(JSON.parse(readFileSync(onDiskPath, "utf-8")));
+    }
+  } finally {
+    try { rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
+  }
 }
 
 function parseWebDavItems(xml: string) {
@@ -3108,20 +3409,29 @@ async function webDavListBackups(config: WebDavConfig) {
 
 async function webDavBackup(config: WebDavConfig) {
   await webDavEnsureCollection(config);
-  // PC now writes .zip so the format matches Android. The zip contains settings.json (for
-  // Android-side restore) and pc-backup.json (PC's full state for lossless self-restore).
+  // .zip layout matches Android: settings.json (for cross-platform restore) + pc-backup.json
+  // (PC's lossless self-restore data). Streamed off disk so multi-GB attachment libraries
+  // don't OOM the JS heap before the PUT starts.
   const fileName = `backup_${backupStamp()}.zip`;
-  const payload = createSettingsBackupZip();
-  const response = await webDavRequest(config, "PUT", fileName, {
-    headers: {
-      "Content-Type": "application/zip",
-      "Content-Length": String(payload.length),
-    },
-    body: payload,
-  });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`WebDAV 备份失败：${response.status} ${text.slice(0, 500)}`);
-  return { fileName, size: payload.length };
+  const tmpRoot = join(process.env.TEMP ?? process.env.TMP ?? dataDir, `rikkahub-webdav-upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  mkdirSync(tmpRoot, { recursive: true });
+  const zipPath = join(tmpRoot, fileName);
+  try {
+    const size = createSettingsBackupZipToPath(zipPath);
+    const bodyStream = Bun.file(zipPath).stream();
+    const response = await webDavRequest(config, "PUT", fileName, {
+      headers: {
+        "Content-Type": "application/zip",
+        "Content-Length": String(size),
+      },
+      body: bodyStream as unknown as BodyInit,
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`WebDAV 备份失败：${response.status} ${text.slice(0, 500)}`);
+    return { fileName, size };
+  } finally {
+    try { rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
+  }
 }
 
 async function webDavRestore(config: WebDavConfig, fileName: string) {
@@ -3130,8 +3440,7 @@ async function webDavRestore(config: WebDavConfig, fileName: string) {
     const text = await response.text();
     throw new Error(`WebDAV 下载失败：${response.status} ${text.slice(0, 500)}`);
   }
-  const buffer = Buffer.from(await response.arrayBuffer());
-  restoreBackupBuffer(buffer, fileName);
+  await streamResponseToTempAndRestore(response, fileName);
 }
 
 async function webDavDelete(config: WebDavConfig, fileName: string) {
@@ -3193,14 +3502,20 @@ function s3RequestUrl(config: S3Config, key: string, query: Record<string, strin
   };
 }
 
-function s3Sign(config: S3Config, method: string, key: string, query: Record<string, string>, payload: Buffer) {
+// `payloadHashOverride` opts the request into AWS's "UNSIGNED-PAYLOAD" SigV4 mode so the
+// caller doesn't have to buffer the whole upload into memory just to compute SHA256.
+// Required for the streaming-zip backup path — a user with multi-GB attachments would
+// otherwise OOM here before the upload even started. Only safe over HTTPS (the AWS docs
+// warn that an MITM could tamper with the body), which every S3-compatible endpoint we
+// target requires anyway.
+function s3Sign(config: S3Config, method: string, key: string, query: Record<string, string>, payload: Buffer, payloadHashOverride?: string) {
   if (!config.accessKeyId || !config.secretAccessKey) throw new Error("S3 凭据未配置");
   if (!config.bucket) throw new Error("S3 bucket 未配置");
   const { requestUrl, canonicalUri, canonicalQuery, host } = s3RequestUrl(config, key, query);
   const now = new Date();
   const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
   const dateStamp = amzDate.slice(0, 8);
-  const payloadHash = sha256Hex(payload);
+  const payloadHash = payloadHashOverride ?? sha256Hex(payload);
   const headers: Record<string, string> = {
     host,
     "x-amz-content-sha256": payloadHash,
@@ -3240,13 +3555,40 @@ async function s3Request(
   config: S3Config,
   method: string,
   key: string,
-  options: { query?: Record<string, string>; body?: Buffer; contentType?: string } = {},
+  options: {
+    query?: Record<string, string>;
+    body?: Buffer;
+    /** Streamed upload (ReadableStream from Bun.file().stream() etc.). When provided we
+     *  switch SigV4 to UNSIGNED-PAYLOAD so we never read the whole upload into a Buffer. */
+    bodyStream?: ReadableStream<Uint8Array>;
+    bodyLength?: number;
+    contentType?: string;
+  } = {},
 ) {
-  const payload = options.body ?? Buffer.alloc(0);
-  const { requestUrl, headers } = s3Sign(config, method, key, options.query ?? {}, payload);
+  let payload: Buffer = Buffer.alloc(0);
+  let payloadHashOverride: string | undefined;
+  let bodyForFetch: BodyInit | undefined;
+  let contentLength: string | undefined;
+  if (options.bodyStream) {
+    payloadHashOverride = "UNSIGNED-PAYLOAD";
+    bodyForFetch = options.bodyStream as unknown as BodyInit;
+    if (options.bodyLength != null) contentLength = String(options.bodyLength);
+  } else {
+    payload = options.body ?? Buffer.alloc(0);
+    bodyForFetch = payload.length ? payload : undefined;
+    if (payload.length) contentLength = String(payload.length);
+  }
+  const { requestUrl, headers } = s3Sign(config, method, key, options.query ?? {}, payload, payloadHashOverride);
   const finalHeaders: Record<string, string> = { ...headers };
   if (options.contentType) finalHeaders["Content-Type"] = options.contentType;
-  return await fetch(requestUrl, { method, headers: finalHeaders, body: payload.length ? payload : undefined });
+  if (contentLength) finalHeaders["Content-Length"] = contentLength;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  try {
+    return await fetch(requestUrl, { method, headers: finalHeaders, body: bodyForFetch, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function s3Prefix(config: S3Config) {
@@ -3292,11 +3634,27 @@ async function s3Backup(config: S3Config) {
   // Match Android's .zip filename so cross-platform S3 sync works.
   const fileName = `backup_${backupStamp()}.zip`;
   const key = `${s3Prefix(config)}${fileName}`;
-  const payload = createSettingsBackupZip();
-  const response = await s3Request(config, "PUT", key, { body: payload, contentType: "application/zip" });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`S3 备份失败：${response.status} ${text.slice(0, 500)}`);
-  return { fileName, size: payload.length };
+  // Stream the zip from disk instead of buffering it. Multi-GB attachment libraries would
+  // otherwise OOM the JS heap before the PUT even starts (and again on the SigV4 SHA256
+  // pass). We pre-stage on disk via createSettingsBackupZipToPath, then hand fetch a
+  // ReadableStream + Content-Length and switch SigV4 to UNSIGNED-PAYLOAD.
+  const tmpRoot = join(process.env.TEMP ?? process.env.TMP ?? dataDir, `rikkahub-s3-upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  mkdirSync(tmpRoot, { recursive: true });
+  const zipPath = join(tmpRoot, fileName);
+  try {
+    const size = createSettingsBackupZipToPath(zipPath);
+    const bodyStream = Bun.file(zipPath).stream();
+    const response = await s3Request(config, "PUT", key, {
+      bodyStream,
+      bodyLength: size,
+      contentType: "application/zip",
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`S3 备份失败：${response.status} ${text.slice(0, 500)}`);
+    return { fileName, size };
+  } finally {
+    try { rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
+  }
 }
 
 async function s3Restore(config: S3Config, fileName: string) {
@@ -3306,8 +3664,11 @@ async function s3Restore(config: S3Config, fileName: string) {
     const text = await response.text();
     throw new Error(`S3 下载失败：${response.status} ${text.slice(0, 500)}`);
   }
-  const buffer = Buffer.from(await response.arrayBuffer());
-  restoreBackupBuffer(buffer, fileName);
+  // Stream the response body to a temp file so we never hold the whole zip in JS memory.
+  // restoreBackupBuffer's API still takes a Buffer (used by the small local-upload path),
+  // but for the cross-platform .zip case applyAndroidZipBackupFromPath already accepts a
+  // file path and is the only call we make — so we shortcut directly to it.
+  await streamResponseToTempAndRestore(response, fileName);
 }
 
 async function s3Delete(config: S3Config, fileName: string) {
@@ -5015,9 +5376,70 @@ async function writeSystemClipboardText(text: string) {
   await runPowerShell("[Console]::InputEncoding=[Text.UTF8Encoding]::new($false); Set-Clipboard -Value ([Console]::In.ReadToEnd())", text);
 }
 
-async function speakSystemText(text: string, speechRate = 1) {
+// Global serialization lock for Windows System.Speech. Without this, parallel client
+// fetches (chunked-playback prefetch) would each spawn their own PowerShell process
+// running SpeechSynthesizer, producing the "multiple voices speaking at once" bug.
+let systemTtsChain: Promise<void> = Promise.resolve();
+
+// All currently-spawned system-TTS PowerShell processes — keyed by Subprocess so we can
+// `kill()` them when the client calls /api/tts/cancel.
+const activeSystemTtsProcs = new Set<ReturnType<typeof Bun.spawn>>();
+
+/** Synthesize text to a WAV file using Windows System.Speech, then return the WAV bytes.
+ *  This mirrors Android's SystemTTSProvider.synthesizeToFile() approach: the audio is
+ *  rendered to a temp file, read back as bytes, and returned to the client for playback
+ *  via HTMLAudioElement. This way the chunked-playback controller can pause/resume/seek
+ *  system TTS audio the same way it does online-provider audio — no special-casing needed
+ *  on the client side. */
+async function synthesizeSystemTtsToWav(text: string, speechRate = 1): Promise<Buffer> {
   const rate = Math.max(-10, Math.min(10, Math.round((speechRate - 1) * 5)));
-  await runPowerShell(`Add-Type -AssemblyName System.Speech; $s=New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate=${rate}; $s.Speak([Console]::In.ReadToEnd())`, text);
+  const prev = systemTtsChain;
+  let release: () => void = () => {};
+  systemTtsChain = new Promise<void>((resolve) => { release = resolve; });
+  const tmpWav = join(process.env.TEMP ?? process.env.TMP ?? dataDir, `tts-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.wav`);
+  try {
+    await prev.catch(() => undefined);
+    // PowerShell script: create SpeechSynthesizer, set rate, output to WAV file, speak,
+    // then close the output. The WAV file is then read by Bun and returned as bytes.
+    const script = [
+      "Add-Type -AssemblyName System.Speech",
+      "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer",
+      `$s.Rate = ${rate}`,
+      `$s.SetOutputToWaveFile('${tmpWav.replace(/'/g, "''")}')`,
+      "$s.Speak([Console]::In.ReadToEnd())",
+      "$s.Dispose()",
+    ].join("; ");
+    const proc = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    activeSystemTtsProcs.add(proc);
+    try {
+      proc.stdin.write(text);
+      proc.stdin.end();
+      const exitCode = await proc.exited;
+      if (exitCode !== 0 && exitCode !== null) {
+        const stderrText = await new Response(proc.stderr).text().catch(() => "");
+        if (stderrText.trim()) console.warn(`[tts] System TTS exited ${exitCode}: ${stderrText.slice(0, 200)}`);
+      }
+    } finally {
+      activeSystemTtsProcs.delete(proc);
+    }
+    // Read the WAV file back
+    if (!existsSync(tmpWav)) throw new Error("System TTS failed to produce audio file");
+    return readFileSync(tmpWav);
+  } finally {
+    release();
+    try { if (existsSync(tmpWav)) rmSync(tmpWav); } catch { /* best-effort */ }
+  }
+}
+
+function cancelAllSystemTts() {
+  for (const proc of activeSystemTtsProcs) {
+    try { proc.kill(); } catch { /* best-effort */ }
+  }
+  activeSystemTtsProcs.clear();
 }
 
 function runMemoryTool(assistant: Assistant, args: Record<string, JsonValue>) {
@@ -9333,12 +9755,25 @@ async function collectSseAudio(
   return Buffer.concat(chunks);
 }
 
-async function generateSpeechWithTtsProvider(text: string, providerId?: string) {
+async function generateSpeechWithTtsProvider(text: string, providerId?: string, speedOverride?: number) {
   const provider = selectedTtsProvider(providerId);
   if (!provider) throw new Error("No TTS provider configured");
   const started = Date.now();
   if (provider.type === "system") {
-    await speakSystemText(text, Number(provider.speechRate ?? 1));
+    const speed = Number.isFinite(speedOverride) && (speedOverride as number) > 0
+      ? (speedOverride as number)
+      : Number(provider.speechRate ?? 1);
+    const wavBytes = await synthesizeSystemTtsToWav(text, speed);
+    addLog({
+      providerId: provider.id,
+      providerName: provider.name,
+      url: "windows:System.Speech",
+      ok: true,
+      latencyMs: Date.now() - started,
+      inputTokens: text.length,
+      outputTokens: wavBytes.length,
+    });
+    return { audio: wavBytes, mime: "audio/wav", provider };
     addLog({
       providerId: provider.id,
       providerName: provider.name,
@@ -11579,6 +12014,72 @@ async function routeApi(request: Request, url: URL) {
   if (path === "settings/proxy/status" && request.method === "GET") {
     return json(proxyStatusPayload());
   }
+  if (path === "data/export/status" && request.method === "GET") {
+    const cachedDbPath = join(dataDir, "rikka_hub_cached.db");
+    let schemaInfo: { identityHash: string; version: number } | null = null;
+    if (existsSync(cachedDbPath)) {
+      try {
+        const db = new Database(cachedDbPath, { readonly: true });
+        const hash = (db.query("SELECT identity_hash FROM room_master_table").get() as any)?.identity_hash;
+        const ver = (db.query("PRAGMA user_version").get() as any)?.user_version;
+        db.close();
+        if (hash) schemaInfo = { identityHash: hash, version: ver ?? 0 };
+      } catch { /* */ }
+    }
+    return json({
+      hasAndroidSchema: !!schemaInfo,
+      schemaInfo,
+      conversationCount: state.conversations.length,
+    });
+  }
+  if (path === "data/register-schema" && request.method === "POST") {
+    const tmpRoot = join(process.env.TEMP ?? process.env.TMP ?? dataDir, `rikkahub-schema-${Date.now()}`);
+    mkdirSync(tmpRoot, { recursive: true });
+    const zipPath = join(tmpRoot, "upload.zip");
+    try {
+      // Support both FormData upload and raw body
+      const contentType = request.headers.get("content-type") ?? "";
+      let zipBuffer: Buffer;
+      if (contentType.includes("multipart/form-data")) {
+        const formData = await request.formData();
+        const file = formData.get("file") as Blob | null;
+        if (!file) return error("未找到上传文件", 400);
+        zipBuffer = Buffer.from(await file.arrayBuffer());
+      } else {
+        zipBuffer = Buffer.from(await request.arrayBuffer());
+      }
+      writeFileSync(zipPath, zipBuffer);
+      const extractDir = join(tmpRoot, "extracted");
+      mkdirSync(extractDir, { recursive: true });
+      const script = [
+        "Add-Type -AssemblyName System.IO.Compression.FileSystem",
+        `[System.IO.Compression.ZipFile]::ExtractToDirectory('${zipPath.replace(/'/g, "''")}', '${extractDir.replace(/'/g, "''")}')`,
+      ].join("; ");
+      Bun.spawnSync(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script]);
+      const dbFile = join(extractDir, "rikka_hub.db");
+      if (!existsSync(dbFile)) return error("备份文件中未找到 rikka_hub.db", 400);
+      // Rename WAL files for SQLite to pick up
+      for (const [src, dest] of [["rikka_hub-wal", "rikka_hub.db-wal"], ["rikka_hub-shm", "rikka_hub.db-shm"]]) {
+        const s = join(extractDir, src);
+        const d = join(extractDir, dest);
+        if (existsSync(s) && !existsSync(d)) try { renameSync(s, d); } catch { /* */ }
+      }
+      // Open db (readonly) to read schema, then serialize (consolidates WAL) and cache
+      const db = new Database(dbFile, { readonly: true });
+      const hash = (db.query("SELECT identity_hash FROM room_master_table").get() as any)?.identity_hash;
+      const ver = (db.query("PRAGMA user_version").get() as any)?.user_version ?? 0;
+      const bytes = db.serialize();
+      db.close();
+      if (!hash) return error("无法从数据库中读取 identity_hash", 400);
+      const cachedDbPath = join(dataDir, "rikka_hub_cached.db");
+      writeFileSync(cachedDbPath, bytes);
+      return json({ status: "ok", schemaInfo: { identityHash: hash, version: ver } });
+    } catch (err) {
+      return error(err instanceof Error ? err.message : String(err), 500);
+    } finally {
+      try { rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* */ }
+    }
+  }
   if (path === "data/export" && request.method === "GET") {
     // Export as a zip — Android-compatible layout (settings.json + upload/ + skills/) plus
     // a PC-only pc-backup.json for full-fidelity self-restore. Streams the zip directly off
@@ -11610,6 +12111,7 @@ async function routeApi(request: Request, url: URL) {
         },
       });
     } catch (err) {
+      console.error("[export] failed:", err);
       try { rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
       return error(err instanceof Error ? err.message : String(err), 500);
     }
@@ -11920,13 +12422,21 @@ async function routeApi(request: Request, url: URL) {
     return json({ status: "ok" });
   }
 
+  // Cancel all currently-running system-TTS PowerShell processes. Called by the floating
+  // play bar's stop button so the "你点了 ✕ 但 Windows TTS 还在念" gap closes within
+  // ~100 ms. Online-TTS providers don't need cancellation server-side — they're already
+  // synchronous request/response, and the client aborts its fetch directly.
+  if (path === "tts/cancel" && request.method === "POST") {
+    cancelAllSystemTts();
+    return json({ status: "ok" });
+  }
   if (path === "tts/speech" && request.method === "POST") {
-    const body = await readJson<{ text?: string; providerId?: string }>(request);
+    const body = await readJson<{ text?: string; providerId?: string; speed?: number }>(request);
     const text = String(body.text ?? "").trim();
     if (!text) return error("Text is required", 400);
     try {
-      const result = await generateSpeechWithTtsProvider(text, body.providerId);
-      if (!result.audio) return json({ status: "spoken", providerId: result.provider.id });
+      const result = await generateSpeechWithTtsProvider(text, body.providerId, body.speed);
+      if (!result.audio) return error("TTS provider returned no audio", 502);
       return new Response(result.audio, {
         headers: {
           "Content-Type": result.mime,
@@ -11977,6 +12487,7 @@ async function routeApi(request: Request, url: URL) {
     return json({ status: "deleted" });
   }
 
+  console.warn(`[404] ${request.method} /api/${path}`);
   return error("Not found", 404);
 }
 

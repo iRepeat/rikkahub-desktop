@@ -1,5 +1,5 @@
 import { handlePing, refreshDailySummary } from "./ping";
-import { dashboardHtml } from "../dashboard/index.html";
+import { dashboardHtml } from "../dashboard/template";
 import { getStats } from "./stats";
 
 export interface Env {

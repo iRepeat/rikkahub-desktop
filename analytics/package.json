@@ -5,5 +5,8 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "db:init": "wrangler d1 execute rikkahub-stats --file=schema.sql"
+  },
+  "dependencies": {
+    "wrangler": "^4.100.0"
   }
 }

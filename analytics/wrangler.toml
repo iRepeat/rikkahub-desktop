@@ -8,9 +8,9 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "rikkahub-stats"
-database_id = "PLACEHOLDER_D1_DATABASE_ID"
+database_id = "36b39df3-5138-4eb9-8e0e-e492f3490260"
 
 # Dashboard auth token — change this to your own secret!
 # Access dashboard at /dashboard?token=YOUR_TOKEN
 [vars]
-AUTH_TOKEN = "CHANGE_ME_TO_A_SECRET_TOKEN"
+AUTH_TOKEN = "REDACTED"

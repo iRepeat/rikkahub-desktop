@@ -442,10 +442,55 @@ function writeSkippedVersion(version: string) {
   try { writeFileSync(skipVersionPath, version.trim()); } catch { /* best-effort */ }
 }
 
+// ── Analytics (anonymous DAU tracking) ────────────────────────────────────
+// One ping per app start + periodic updates during the session.  Sends only:
+//   device UUID, date, version, OS, cumulative message count for the day.
+// No user content, no IP storage, no model names, no file names.
+const ANALYTICS_ENDPOINT = "https://rikkahub-stats.yuh-g.workers.dev/ping";
+const deviceIdPath = join(dataDir, "device-id.txt");
+let analyticsDeviceId = "";
+let analyticsMsgCount = 0;
+
+function readOrCreateDeviceId(): string {
+  try { return readFileSync(deviceIdPath, "utf-8").trim(); } catch { /* not found */ }
+  const id = crypto.randomUUID();
+  try { writeFileSync(deviceIdPath, id); } catch { /* best-effort */ }
+  return id;
+}
+
+function localDateStr(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function sendAnalyticsPing(): void {
+  if (!analyticsDeviceId) return;
+  const url = `${ANALYTICS_ENDPOINT}?id=${encodeURIComponent(analyticsDeviceId)}`
+    + `&d=${localDateStr()}`
+    + `&v=${encodeURIComponent(APP_VERSION)}`
+    + `&os=${process.platform === "linux" ? "linux" : "win"}`
+    + `&mc=${analyticsMsgCount}`;
+  fetch(url, { method: "GET", signal: AbortSignal.timeout(5000) }).catch(() => { /* fire-and-forget */ });
+}
+
+function startAnalytics(): void {
+  analyticsDeviceId = readOrCreateDeviceId();
+  // Reset daily counter if the date rolled over (long-running instance)
+  const today = localDateStr();
+  let lastDate = today;
+  sendAnalyticsPing(); // startup ping
+  setInterval(() => {
+    const now = localDateStr();
+    if (now !== lastDate) { analyticsMsgCount = 0; lastDate = now; }
+    sendAnalyticsPing();
+  }, 10 * 60 * 1000); // every 10 minutes
+}
+
 // MUST be kept in sync with web-ui/src-tauri/tauri.conf.json's `version` field. The update
 // checker compares this against the latest GitHub release tag and the version is also shown
 // verbatim in the About page. If you bump tauri.conf.json's version, bump this too.
-const APP_VERSION = "1.0.9";
+const APP_VERSION = "1.1.0";
 
 type GithubRelease = {
   tag_name?: string;
@@ -13220,6 +13265,7 @@ async function routeApi(request: Request, url: URL) {
       finishInterruptedPendingToolsInConversation(conversation);
       const processedParts = applyInputRegexTransformParts(body.parts ?? [], assistant);
       const userMessage = message("USER", markOcrPendingParts(processedParts, picked.model));
+      analyticsMsgCount++;
       const userNode = { id: id(), messages: [userMessage], selectIndex: 0 };
       conversation.messages.push(userNode);
       conversation.chatSuggestions = [];
@@ -14459,6 +14505,11 @@ const server = (() => {
 console.log(`RikkaHub PC server running at http://localhost:${port}`);
 console.log(`Data directory: ${dataDir}`);
 console.log("Press Ctrl+C to stop RikkaHub PC.");
+
+// Start anonymous analytics (DAU tracking).  Fire-and-forget — a failed ping
+// must never block or crash the server.  The endpoint resolves to a Cloudflare
+// Worker that stores only an anonymous device UUID + date + version.
+startAnalytics();
 
 function shutdown() {
   server.stop(true);

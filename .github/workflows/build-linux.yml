@@ -1,10 +1,14 @@
 name: Build Linux Binary
 
-# 产出 Linux x64 单文件二进制(含 mupdf wasm 嵌入),供 GitHub Release 分发。
-# 后端 update/check 按 *_linux_x64 命名约定匹配这个 asset,所以产物文件名不能改。
+# 产出 Linux x64 可直接运行的 tar.gz 包(二进制 + 前端资源 + mupdf wasm 嵌入)。
+# 前端资源由 routeStatic 在运行时从 exe 同目录的 web-ui/build/client 读取,
+# 不是嵌入二进制的,所以发布包必须把两者一起打包,否则用户解压单文件二进制后
+# 打开页面只会看到 "web-ui is not built"。
+#
+# 后端 update/check 按 *_linux_x64.tar.gz 命名约定匹配这个 asset,文件名不能改。
 #
 # 两种触发:
-#   - tag 推送(v*.*.*):编译并自动附加到对应版本的 Release
+#   - tag 推送(v*.*.*):打包并自动附加到对应版本的 Release
 #   - 手动触发(workflow_dispatch):只产出 artifact,从 Actions 页下载后手动上传到 Release
 on:
   workflow_dispatch:
@@ -42,24 +46,49 @@ jobs:
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           fi
 
-      # mupdf 的 wasm 必须先存在于 node_modules,bun --compile 才能把它作为 asset 嵌入单文件二进制。
-      - name: Install server dependencies
-        working-directory: pc-server
-        run: bun install --frozen-lockfile
+      # ── 构建前端 SPA ──────────────────────────────────────────────────────
+      # react-router build 在 SPA 模式下仍会引用 react-dom/server,而 Bun 自带的
+      # react-dom/server.bun.js 缺少 renderToPipeableStream,会导致 build 报错。
+      # 用 Node 版的 server bundle 替换它(Dockerfile 里也是同样处理)。
+      - name: Build web-ui
+        working-directory: web-ui
+        run: |
+          bun install --frozen-lockfile
+          rm -f node_modules/react-dom/server.bun.js
+          ln -sf server.node.js node_modules/react-dom/server.bun.js
+          rm -f node_modules/react-dom/cjs/react-dom-server.bun.development.js
+          ln -sf react-dom-server.node.development.js node_modules/react-dom/cjs/react-dom-server.bun.development.js
+          rm -f node_modules/react-dom/cjs/react-dom-server.bun.production.js
+          ln -sf react-dom-server.node.production.js node_modules/react-dom/cjs/react-dom-server.bun.production.js
+          bun run build
 
+      # ── 编译后端二进制 ────────────────────────────────────────────────────
+      # mupdf 的 wasm 必须先存在于 node_modules,bun --compile 才能把它作为 asset 嵌入单文件二进制。
       - name: Compile Linux x64 binary
         working-directory: pc-server
         run: |
-          out="../Rikkahub_${{ steps.ver.outputs.version }}_linux_x64"
-          bun build --compile --target=bun-linux-x64 server.ts --outfile "$out"
-          chmod +x "$out"
-          ls -lh "$out"
+          bun install --frozen-lockfile
+          mkdir -p /tmp/pkg/rikkahub-pc/web-ui/build
+          bun build --compile --target=bun-linux-x64 server.ts --outfile /tmp/pkg/rikkahub-pc/rikkahub-pc
+          chmod +x /tmp/pkg/rikkahub-pc/rikkahub-pc
+
+      # ── 组装可运行目录并打包 tar.gz ──────────────────────────────────────
+      # 解压后得到一个自包含的 rikkahub-pc/ 目录:二进制 + 前端。
+      # 用户解压后直接 ./rikkahub-pc 即可运行(tar 保留了 +x 权限位)。
+      - name: Assemble package
+        run: |
+          cp -r web-ui/build/client /tmp/pkg/rikkahub-pc/web-ui/build/client
+          # sanity:确认 index.html 在位,否则 routeStatic 会回退到 "not built" 提示
+          test -f /tmp/pkg/rikkahub-pc/web-ui/build/client/index.html
+          cd /tmp/pkg
+          tar czf "/tmp/Rikkahub_${{ steps.ver.outputs.version }}_linux_x64.tar.gz" rikkahub-pc/
+          ls -lh "/tmp/Rikkahub_${{ steps.ver.outputs.version }}_linux_x64.tar.gz"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
           name: Rikkahub_${{ steps.ver.outputs.version }}_linux_x64
-          path: Rikkahub_${{ steps.ver.outputs.version }}_linux_x64
+          path: /tmp/Rikkahub_${{ steps.ver.outputs.version }}_linux_x64.tar.gz
           retention-days: 30
 
       # tag 触发时自动附加到对应版本的 GitHub Release;手动触发只产出 artifact 供下载。
@@ -67,4 +96,4 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: Rikkahub_${{ steps.ver.outputs.version }}_linux_x64
+          files: /tmp/Rikkahub_${{ steps.ver.outputs.version }}_linux_x64.tar.gz

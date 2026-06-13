@@ -113,7 +113,10 @@ the runtime will.
   for the test endpoints.
 - **Releasing a new exe**: web-ui build + pc-server compile. Smoke first.
 - **Releasing the Linux binary**: push a `v*.*.*` tag — `.github/workflows/build-linux.yml`
-  compiles the x64 binary on CI and attaches it to the Release automatically. The in-app
-  updater matches the asset by the `Rikkahub_<tag>_linux_x64` naming convention, so don't
-  rename the uploaded file. Windows (`Rikkahub_<tag>_x64-setup.exe`) and Linux assets live
-  side by side on the same Release.
+  builds web-ui + compiles the x64 binary + packs both into a tar.gz, and attaches it to the
+  Release automatically. The tar.gz is **not** a bare binary: `routeStatic` serves the
+  frontend from `web-ui/build/client/` next to the exe at runtime, so the bundle must ship
+  both or the user sees "web-ui is not built". The in-app updater matches the asset by the
+  `Rikkahub_<tag>_linux_x64.tar.gz` naming convention, so don't rename the uploaded file.
+  Windows (`Rikkahub_<tag>_x64-setup.exe`) and Linux assets live side by side on the same
+  Release.

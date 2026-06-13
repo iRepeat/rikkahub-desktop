@@ -1,7 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import * as fsPromises from "node:fs/promises";
-import { dirname, extname, join, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import process from "node:process";
 import { gunzipSync, gzipSync, inflateRawSync } from "node:zlib";
 import { Database } from "bun:sqlite";
@@ -573,11 +573,11 @@ async function fetchLatestReleaseFromHtmlRedirect(repo: string): Promise<{ tag: 
 
 // Look for a previously-downloaded installer for this exact version in the temp dir so the
 // UI can offer "直接安装" without re-downloading. Matched first by canonical filename, then
-// by any file whose name embeds the version tag (tolerates users moving/renaming files).
+// by any *.exe whose name embeds the version tag (tolerates users moving/renaming files).
 // Returns null if isNewer is false (don't surface stale installers).
 //
-// 不限定后缀：Windows 缓存的是 .exe，Linux 缓存的是无后缀二进制，只要文件名包含版本号
-// 且非空就认可 —— 临时目录由我们自己的 update/download 写入，来源可信。
+// 仅 Windows 调用(buildResponse 里按平台过滤):Linux 的更新是 tar.gz,需要解压后才能
+// apply,缓存的 tar.gz 没法直接用,所以 Linux 走"每次重新下载解压"的路径,见 update/download。
 function probeCachedInstaller(fileName: string, tag: string, isNewer: boolean): string | null {
   if (!isNewer || !fileName) return null;
   try {
@@ -588,6 +588,7 @@ function probeCachedInstaller(fileName: string, tag: string, isNewer: boolean): 
       return canonical;
     }
     for (const entry of readdirSync(tmpDir)) {
+      if (!/\.exe$/i.test(entry)) continue;
       if (tag && !entry.includes(tag)) continue;
       const candidate = join(tmpDir, entry);
       try {
@@ -14141,15 +14142,16 @@ async function routeApi(request: Request, url: URL) {
     const repo = "yuh-G/rikkahub-desktop";
 
     // 按当前运行平台挑选 release asset。命名约定：
-    //   Windows: Rikkahub_<tag>_x64-setup.exe
-    //   Linux:   Rikkahub_<tag>_linux_x64   (无后缀的可执行二进制)
-    //   macOS:   暂未发布 —— 返回 undefined，前端引导用户去 Release 页手动下载。
-    // 容器化部署(Docker 等)无法通过替换二进制持久更新，直接返回 undefined，
+    //   Windows: Rikkahub_<tag>_x64-setup.exe   (NSIS 安装器,含 exe+web-ui+icons)
+    //   Linux:   Rikkahub_<tag>_linux_x64.tar.gz (二进制 + 前端资源一起打包,
+    //            因为前端由 routeStatic 在运行时从文件系统读取,不嵌入二进制)
+    //   macOS:   暂未发布 —— 返回 undefined,前端引导用户去 Release 页手动下载。
+    // 容器化部署(Docker 等)无法通过替换二进制持久更新,直接返回 undefined,
     // 前端会提示用 docker pull 升级镜像。
     const pickAsset = (assets: GithubRelease["assets"]): GithubRelease["assets"][number] | undefined => {
       if (RUNNING_IN_CONTAINER) return undefined;
       if (RUNTIME_PLATFORM === "linux") {
-        return assets.find((a) => /linux[-_]x64$/i.test(a.name ?? ""));
+        return assets.find((a) => /linux[-_]x64.*\.tar\.gz$/i.test(a.name ?? ""));
       }
       if (RUNTIME_PLATFORM === "mac") {
         return assets.find((a) => /\.dmg$/i.test(a.name ?? ""))
@@ -14161,7 +14163,7 @@ async function routeApi(request: Request, url: URL) {
 
     // API 不可用(rate limit)时的兜底:按命名约定直接拼 asset URL。
     const predictAssetName = (tag: string): string =>
-      RUNTIME_PLATFORM === "linux" ? `Rikkahub_${tag}_linux_x64`
+      RUNTIME_PLATFORM === "linux" ? `Rikkahub_${tag}_linux_x64.tar.gz`
       : RUNTIME_PLATFORM === "mac" ? `Rikkahub_${tag}_mac_x64.dmg`
       : `Rikkahub_${tag}_x64-setup.exe`;
 
@@ -14175,7 +14177,9 @@ async function routeApi(request: Request, url: URL) {
       fields.isSkipped = isNewer && latest === skipped;
       fields.platform = RUNTIME_PLATFORM;
       fields.containerized = RUNNING_IN_CONTAINER;
-      if (!RUNNING_IN_CONTAINER) {
+      // 缓存探测只对 Windows 有意义(.exe 安装器可直接启动)。Linux 下 download 需要先解压
+      // tar.gz 才能得到 apply 用的二进制路径,缓存的 tar.gz 不能直接 apply,所以跳过。
+      if (!RUNNING_IN_CONTAINER && RUNTIME_PLATFORM === "win") {
         fields.cachedInstallerPath = probeCachedInstaller(String(fields.fileName ?? ""), latest, isNewer && !fields.isSkipped);
       }
       return json(fields);
@@ -14292,68 +14296,114 @@ async function routeApi(request: Request, url: URL) {
       }
       const buffer = Buffer.from(await res.arrayBuffer());
       writeFileSync(targetPath, buffer);
-      // Linux/macOS binary needs the executable bit set or update/apply's rename would leave
-      // a non-runnable file. Windows ignores POSIX permission bits.
-      if (RUNTIME_PLATFORM !== "win") {
-        try { chmodSync(targetPath, 0o755); } catch { /* best-effort — fs may not support it */ }
+      // Windows: targetPath 指向 .exe 安装器,前端直接交给 Tauri launch_installer。
+      // Linux: 下载的是 tar.gz(二进制 + 前端资源),解压后返回内部二进制路径,
+      //        update/apply 据此连同同目录的 web-ui 一起替换。
+      if (RUNTIME_PLATFORM === "win") {
+        return json({ status: "ok", path: targetPath, size: buffer.length });
       }
-      return json({ status: "ok", path: targetPath, size: buffer.length });
+      const extractBase = fileName.replace(/\.tar\.gz$/i, "") || "rikkahub-pc";
+      const extractDir = join(tmpDir, `extracted-${extractBase}`);
+      try { rmSync(extractDir, { recursive: true, force: true }); } catch { /* 清理上一次解压残留 */ }
+      mkdirSync(extractDir, { recursive: true });
+      const tar = Bun.spawnSync(["tar", "xzf", targetPath, "-C", extractDir]);
+      if (tar.exitCode !== 0) {
+        return error(`解压更新包失败：${tar.stderr?.toString().trim() || `tar exited ${tar.exitCode}`}`, 500);
+      }
+      // 解压后约定结构:extractDir/rikkahub-pc/rikkahub-pc (+ extractDir/rikkahub-pc/web-ui/)
+      const innerExe = join(extractDir, "rikkahub-pc", "rikkahub-pc");
+      if (!existsSync(innerExe) || statSync(innerExe).size === 0) {
+        return error("解压后未找到可执行文件（更新包结构异常）", 500);
+      }
+      try { chmodSync(innerExe, 0o755); } catch { /* best-effort */ }
+      return json({ status: "ok", path: innerExe, size: buffer.length });
     } catch (err) {
       return error(err instanceof Error ? err.message : "Download failed", 502);
     }
   }
-  // Linux/macOS only: swaps the running executable for the freshly-downloaded binary.
-  // The new binary was placed in the temp rikkahub-updates dir by update/download and is
-  // already chmod +x. We rename it over process.execPath — Linux allows renaming a file that
-  // is currently executing (the running process keeps using the old inode), so the swap is
-  // atomic and the old binary keeps serving requests until the process exits. The UI then
-  // tells the user to restart; systemd-managed installs with Restart=always come back alone.
+  // Linux only: 把刚下载并解压的新版本(二进制 + 前端资源)原地替换到当前应用目录。
+  // download 已把 tar.gz 解压到 <tmp>/rikkahub-updates/extracted-*/rikkahub-pc/,其中含新
+  // 二进制和 web-ui。这里:
+  //   1. 用 staging + rename 原子替换 web-ui 目录(routeStatic 每次请求重读,换完立即生效)
+  //   2. rename 新二进制覆盖正在运行的二进制(Linux 允许,旧进程继续用旧 inode 直到退出)
+  // 替换成功后前端提示用户重启;systemd 配 Restart=always 的会自动拉起新版本。
   //
-  // Windows is handled entirely by the Tauri shell's launch_installer (NSIS), so this endpoint
-  // refuses to run there. Docker is also refused — a container rebuild would throw the swap
-  // away, so the right path there is `docker pull`.
+  // Windows 走 Tauri NSIS 安装器,macOS 暂不支持原地更新 —— 都在此拒绝。Docker 也不行
+  // (容器重建即丢失替换),应 docker pull。
   if (path === "update/apply" && request.method === "POST") {
-    if (RUNTIME_PLATFORM === "win") return error("Windows 请使用安装程序更新", 400);
+    if (RUNTIME_PLATFORM !== "linux") return error("仅 Linux 支持原地更新", 400);
     if (RUNNING_IN_CONTAINER) return error("容器化部署无法原地更新，请通过 docker pull 升级镜像", 400);
     try {
       const body = await readJson<{ path?: string }>(request);
-      const srcPath = String(body.path ?? "").trim();
-      if (!srcPath) return error("缺少更新文件路径", 400);
-      // Security: only accept files directly inside our own temp updates dir, so a crafted
-      // request can't trick us into copying an arbitrary file over the executable.
+      const srcExe = String(body.path ?? "").trim();
+      if (!srcExe) return error("缺少更新文件路径", 400);
+      const resolvedSrcExe = resolve(srcExe);
+      if (!existsSync(resolvedSrcExe)) return error("更新文件不存在", 404);
+      if (statSync(resolvedSrcExe).size === 0) return error("更新文件为空", 400);
+
+      // Security: srcExe 必须在我们的临时更新目录树内(download 解压到这里),
+      // 否则一个构造的请求可能让我们把任意文件拷到可执行路径上。
       const updatesDir = resolve(join(tempDir(), "rikkahub-updates"));
-      const resolvedSrc = resolve(srcPath);
-      if (dirname(resolvedSrc) !== updatesDir) {
+      const rel = relative(updatesDir, resolvedSrcExe);
+      if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
         return error("更新文件路径不在受信任目录内", 400);
       }
-      if (!existsSync(resolvedSrc)) return error("更新文件不存在", 404);
-      if (statSync(resolvedSrc).size === 0) return error("更新文件为空", 400);
 
       const currentExe = resolve(process.execPath);
+      const currentAppDir = dirname(currentExe);
       if (!existsSync(currentExe)) return error(`当前可执行文件路径无效：${currentExe}`, 500);
 
-      // Back up the running binary so a botched update can be rolled back by hand
-      // (<exe>.bak). Best-effort — if the dir is read-only we skip the backup, not fail.
-      const backupPath = `${currentExe}.bak`;
-      try {
-        copyFileSync(currentExe, backupPath);
-      } catch (backupErr) {
-        console.warn("[update/apply] backup skipped:", backupErr);
+      // 新应用目录 = 解压出的 rikkahub-pc/(新二进制的同级目录,含新 web-ui)。
+      const newAppDir = dirname(resolvedSrcExe);
+
+      // ── 1. 替换前端资源 (web-ui 目录) ──────────────────────────────────
+      // 拷到 .web-ui.new 再原子 rename 覆盖。失败不致命(新版本可能没改前端):记 warning
+      // 后继续替换二进制 —— 避免前端替换的小问题阻塞整个更新。
+      const currentWebUi = join(currentAppDir, "web-ui");
+      const newWebUi = join(newAppDir, "web-ui");
+      if (existsSync(newWebUi)) {
+        const staging = join(currentAppDir, ".web-ui.new");
+        const bak = join(currentAppDir, ".web-ui.bak");
+        try {
+          if (existsSync(staging)) rmSync(staging, { recursive: true, force: true });
+          const cp = Bun.spawnSync(["cp", "-r", newWebUi, staging]);
+          if (cp.exitCode !== 0) {
+            console.warn("[update/apply] cp web-ui to staging failed:", cp.stderr?.toString().trim());
+          } else if (existsSync(currentWebUi)) {
+            if (existsSync(bak)) rmSync(bak, { recursive: true, force: true });
+            try { renameSync(currentWebUi, bak); } catch { /* 首次安装可能没有旧 web-ui */ }
+            try {
+              renameSync(staging, currentWebUi);
+              try { rmSync(bak, { recursive: true, force: true }); } catch { /* */ }
+            } catch (swapErr) {
+              console.warn("[update/apply] web-ui swap failed, rolling back:", swapErr);
+              try { if (existsSync(bak)) renameSync(bak, currentWebUi); } catch { /* */ }
+              return error("替换前端资源失败，更新未完成", 500);
+            }
+          } else {
+            // 当前没有 web-ui 目录(异常状态),直接把 staging 就位。
+            renameSync(staging, currentWebUi);
+          }
+        } catch (webUiErr) {
+          console.warn("[update/apply] web-ui update skipped:", webUiErr);
+        }
       }
 
-      // Defensive: ensure the new file is executable even if it arrived via the cache probe
-      // or was dropped here by hand (update/download already chmod'd it).
-      try { chmodSync(resolvedSrc, 0o755); } catch { /* fs may not support it */ }
-
-      // Atomic swap. rename on the same filesystem is atomic; if src and dest cross a mount
-      // boundary (rare — the temp dir usually shares the root fs), fall back to copy + unlink.
+      // ── 2. 备份 + 原子替换二进制 ───────────────────────────────────────
+      const backupPath = `${currentExe}.bak`;
       try {
-        renameSync(resolvedSrc, currentExe);
+        if (existsSync(backupPath)) unlinkSync(backupPath);
+        copyFileSync(currentExe, backupPath);
+      } catch (backupErr) {
+        console.warn("[update/apply] binary backup skipped:", backupErr);
+      }
+      try { chmodSync(resolvedSrcExe, 0o755); } catch { /* */ }
+      try {
+        renameSync(resolvedSrcExe, currentExe);
       } catch (renameErr) {
         console.warn("[update/apply] rename failed, falling back to copy:", renameErr);
-        copyFileSync(resolvedSrc, currentExe);
+        copyFileSync(resolvedSrcExe, currentExe);
         try { chmodSync(currentExe, 0o755); } catch { /* */ }
-        try { unlinkSync(resolvedSrc); } catch { /* */ }
       }
 
       return json({ status: "ok", exePath: currentExe, backupPath: existsSync(backupPath) ? backupPath : null, needRestart: true });

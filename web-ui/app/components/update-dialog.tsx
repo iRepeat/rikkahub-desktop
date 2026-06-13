@@ -196,16 +196,16 @@ export function UpdateDialog({ info, open, onClose }: UpdateDialogProps) {
         ) : null}
         {installerPath ? (
           <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-xs text-emerald-700 dark:text-emerald-300">
-            {installerCached
-              ? "✅ 更新包已就绪："
-              : info.platform === "linux"
-                ? "更新包已下载完成，点击下方按钮应用更新："
-                : "更新包已下载完成，点击下方按钮重启并更新："}
-            <code className="ml-1 break-all font-mono">{installerPath}</code>
-            <br />
-            {info.platform === "linux"
-              ? "数据目录与配置不受影响，应用后需手动重启 Rikkahub 生效。"
-              : "安装过程会自动保留你的数据目录和配置。"}
+            {info.platform === "linux" ? (
+              <>✅ 新版本已下载就绪（含二进制与前端）。点击下方按钮应用更新，应用后需手动重启 Rikkahub 生效。数据目录与配置不受影响。</>
+            ) : (
+              <>
+                {installerCached ? "✅ 更新包已就绪：" : "更新包已下载完成，点击下方按钮重启并更新："}
+                <code className="ml-1 break-all font-mono">{installerPath}</code>
+                <br />
+                安装过程会自动保留你的数据目录和配置。
+              </>
+            )}
           </div>
         ) : null}
         <DialogFooter>

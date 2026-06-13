@@ -1,8 +1,8 @@
 export const onRequest: PagesFunction = async (context) => {
   const url = new URL(context.request.url);
   const token = url.searchParams.get("token");
-  const AUTH_TOKEN = context.env.AUTH_TOKEN ?? "REDACTED";
-  if (token !== AUTH_TOKEN) {
+  const AUTH_TOKEN = context.env.AUTH_TOKEN;
+  if (!AUTH_TOKEN || token !== AUTH_TOKEN) {
     return new Response("未授权访问", { status: 401, headers: { "Content-Type": "text/plain; charset=utf-8" } });
   }
   return new Response(dashboardHtml, {

@@ -10,7 +10,7 @@ binding = "DB"
 database_name = "rikkahub-stats"
 database_id = "36b39df3-5138-4eb9-8e0e-e492f3490260"
 
-# Dashboard auth token — change this to your own secret!
-# Access dashboard at /dashboard?token=YOUR_TOKEN
+# Dashboard auth token — DO NOT commit a real value here.
+# Set the real value in CF Dashboard → Pages → Settings → Environment variables.
 [vars]
-AUTH_TOKEN = "REDACTED"
+AUTH_TOKEN = "REPLACE_IN_CF_DASHBOARD"

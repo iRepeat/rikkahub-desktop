@@ -300,6 +300,53 @@ function ChatInputInner({
   const imageInputRef = React.useRef<HTMLInputElement | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+
+  // ── 输入框高度拖拽 ──────────────────────────────────────────────────
+  // 用户可上下拖动输入框上沿调整高度（左右不拖），高度持久化到 displaySetting，
+  // 切换会话 / 重启后保留。拖拽过程中只改本地 dragHeight（流畅），松手才提交一次，
+  // 避免 POST 风暴；store 由 SSE 推回更新，无需手动同步。
+  const chatInputHeight = useSettingsStore(
+    (state) => state.settings?.displaySetting.chatInputHeight ?? null,
+  );
+  const [dragHeight, setDragHeight] = React.useState<number | null>(null);
+  const dragStartRef = React.useRef<{ startY: number; startHeight: number } | null>(null);
+  // 拖拽中用 dragHeight，否则用持久化值；都为 null 时回退默认 60。
+  const effectiveHeight = dragHeight ?? chatInputHeight;
+  const inputMinHeight = effectiveHeight ?? 60;
+  const inputMaxHeight = Math.max(
+    inputMinHeight,
+    typeof window !== "undefined" ? window.innerHeight * 0.7 : 600,
+  );
+  const onResizePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startHeight = effectiveHeight ?? 60;
+    dragStartRef.current = { startY: event.clientY, startHeight };
+    setDragHeight(startHeight);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const onResizePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = dragStartRef.current;
+    if (!start) return;
+    // 向下拖（dy > 0）→ 高度减小；向上拖（dy < 0）→ 高度增大。
+    const next = start.startHeight - (event.clientY - start.startY);
+    const min = 60;
+    const max = typeof window !== "undefined" ? window.innerHeight * 0.7 : 600;
+    setDragHeight(Math.round(Math.min(Math.max(next, min), max)));
+  };
+  const onResizePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragStartRef.current) return;
+    dragStartRef.current = null;
+    const finalHeight = dragHeight;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (finalHeight != null && finalHeight !== chatInputHeight) {
+      void api
+        .post("settings/display", { chatInputHeight: finalHeight })
+        .catch((err) => console.warn("[chat-input] save height failed", err));
+    }
+  };
+
   const [submitting, setSubmitting] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
   const [uploadMenuOpen, setUploadMenuOpen] = React.useState(false);
@@ -733,6 +780,19 @@ function ChatInputInner({
       )}
     >
       <div className="mx-auto w-full max-w-3xl px-4 py-4">
+        {/* 可拖拽的上沿手柄：上下拖改变输入框高度（左右锁定）。对标微信等桌面聊天
+            应用，让用户按需放大/收起输入区，尺寸跨会话与重启保留。 */}
+        <div
+          className="flex h-3 cursor-ns-resize touch-none items-center justify-center"
+          onPointerDown={onResizePointerDown}
+          onPointerMove={onResizePointerMove}
+          onPointerUp={onResizePointerUp}
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="拖动调整输入框大小"
+        >
+          <div className="h-1 w-10 rounded-full bg-border/70 transition-colors hover:bg-primary/50" />
+        </div>
         <div
           className={cn(
             "relative flex flex-col gap-2 rounded-lg border bg-muted/50 p-2 shadow-sm transition-shadow focus-within:shadow-md focus-within:ring-1 focus-within:ring-ring",
@@ -853,8 +913,9 @@ function ChatInputInner({
               }}
             placeholder={placeholder}
             disabled={!ready || disabled}
-            className="min-h-[60px] max-h-[200px] resize-none border-0 bg-transparent dark:bg-transparent p-2 text-sm shadow-none focus-visible:ring-0"
+            className="resize-none border-0 bg-transparent dark:bg-transparent p-2 text-sm shadow-none focus-visible:ring-0"
             rows={2}
+            style={{ minHeight: `${inputMinHeight}px`, maxHeight: `${inputMaxHeight}px` }}
           />
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1">

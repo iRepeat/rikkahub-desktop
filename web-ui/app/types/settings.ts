@@ -23,6 +23,8 @@ export interface DisplaySetting {
   chatFontFamilyCss?: string;
   pasteLongTextAsFile: boolean;
   pasteLongTextThreshold: number;
+  /** User-resizable chat input min-height in px (null = default). PC-only. */
+  chatInputHeight?: number | null;
   [key: string]: unknown;
 }
 

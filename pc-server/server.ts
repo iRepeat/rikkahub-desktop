@@ -887,6 +887,9 @@ function defaultSettings(): Settings {
       fontSizeRatio: 1,
       pasteLongTextAsFile: false,
       pasteLongTextThreshold: 1000,
+      // User-resizable chat input height in px (null = default min). Persisted across
+      // restarts via displaySetting. PC-only — stripped before syncing to Android.
+      chatInputHeight: null,
     },
     enableWebSearch: false,
     favoriteModels: [],
@@ -3212,7 +3215,7 @@ function rewriteAvatarsInSettings(settings: any, mapping: Record<string, string>
     // - chatFontFamily: PC uses "" (empty string) which isn't a valid Android enum value
     // - chatFontFamilyCss: PC-only CSS field
     // - uiFontSize / chatFontSize: PC-only font size fields
-    const pcOnlyDisplayFields = ["chatFontFamily", "chatFontFamilyCss", "uiFontSize", "chatFontSize"];
+    const pcOnlyDisplayFields = ["chatFontFamily", "chatFontFamilyCss", "uiFontSize", "chatFontSize", "chatInputHeight"];
     for (const field of pcOnlyDisplayFields) {
       if (field in displaySetting) delete displaySetting[field];
     }

@@ -13362,10 +13362,16 @@ async function routeApi(request: Request, url: URL) {
   }
   if (path === "context-limit" && request.method === "GET") {
     // 查询某模型的 context window 上限(来自 models.dev)。前端切换当前模型时调用,
-    // 让统计行分母跟随"当前选中模型"而非"生成时模型"。cache 未加载或匹配不到返回 null。
+    // 让统计行分母跟随"当前选中模型"而非"生成时模型"。匹配不到返回 null。
     const mid = url.searchParams.get("modelId");
     const ptype = url.searchParams.get("providerType") ?? "";
-    if (!mid || !modelsDevCache) return json({ contextLimit: null });
+    if (!mid) return json({ contextLimit: null });
+    // 首次启动时前端可能赶在 models.dev 加载完之前发请求。await 一下:已加载则立即返回
+    // (常态),还在加载则等它完(loadModelsDev 内部有 10s fetch timeout 兜底)。这样 null 的
+    // 语义是确定的"models.dev 里查不到此模型",前端可以安全缓存,不会把启动期的临时空
+    // 缓存永久当真。loadModelsDev 对并发调用做了去重,多个请求共用同一个 in-flight promise。
+    await loadModelsDev();
+    if (!modelsDevCache) return json({ contextLimit: null });
     return json({ contextLimit: lookupContextLimit(modelsDevCache, ptype, mid) });
   }
   if (path === "settings/provider/models" && request.method === "POST") {

@@ -203,9 +203,11 @@ function formatNumber(value: number): string {
   return new Intl.NumberFormat().format(value);
 }
 
-// 当前选中模型的 context limit 缓存(按 "providerType/modelId" 键)。让统计行分母跟随
-// "当前模型"而非"生成时模型"——切模型时分母立即更新,辅助用户判断"换成这个模型容量够不够"。
-const contextLimitCache = new Map<string, number | null>();
+// 当前选中模型的 context limit 缓存(按 "providerType/modelId" 键,值是 Promise)。
+// 让统计行分母跟随"当前模型"而非"生成时模型"——切模型时分母立即更新,辅助用户判断
+// "换成这个模型容量够不够"。缓存 Promise 而非解析后的值,是为了同 tick 去重:一条对话
+// 50 条消息同时 mount 时只发 1 个请求(而不是 50 个),解析完的 Promise 复用即零开销。
+const contextLimitCache = new Map<string, Promise<number | null>>();
 function useCurrentContextLimit(): number | null | undefined {
   const { currentModel, currentProvider } = useCurrentModel();
   const modelId = currentModel?.modelId;
@@ -218,26 +220,23 @@ function useCurrentContextLimit(): number | null | undefined {
       return;
     }
     const cacheKey = `${providerType}/${modelId}`;
-    const cached = contextLimitCache.get(cacheKey);
-    if (cached !== undefined) {
-      setLimit(cached);
-      return;
+    // 首次查才发请求,后续(含同 tick 其他消息)复用同一 Promise。后端 context-limit 路由
+    // 会 await models.dev 加载完,所以 null 的语义是确定的"models.dev 里查不到"——可安全缓存。
+    let p = contextLimitCache.get(cacheKey);
+    if (!p) {
+      p = api
+        .get<{ contextLimit: number | null }>(
+          `context-limit?modelId=${encodeURIComponent(modelId)}&providerType=${encodeURIComponent(providerType)}`,
+        )
+        .then((res) => res.contextLimit ?? null)
+        .catch(() => null);
+      contextLimitCache.set(cacheKey, p);
     }
     let cancelled = false;
     setLimit(undefined); // loading:此时 getNerdStats 回退到 usage.contextLimit(不闪烁)
-    void api
-      .get<{ contextLimit: number | null }>(
-        `context-limit?modelId=${encodeURIComponent(modelId)}&providerType=${encodeURIComponent(providerType)}`,
-      )
-      .then((res) => {
-        if (cancelled) return;
-        const v = res.contextLimit ?? null;
-        contextLimitCache.set(cacheKey, v);
-        setLimit(v);
-      })
-      .catch(() => {
-        if (!cancelled) setLimit(null);
-      });
+    void p.then((v) => {
+      if (!cancelled) setLimit(v);
+    });
     return () => {
       cancelled = true;
     };

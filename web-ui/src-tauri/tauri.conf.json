@@ -55,6 +55,7 @@
     ],
     "resources": {
       "../../icons/": "icons/",
+      "../../fonts/": "fonts/",
       "../build/client/": "web-ui/build/client/"
     },
     "externalBin": ["binaries/rikkahub-server"],

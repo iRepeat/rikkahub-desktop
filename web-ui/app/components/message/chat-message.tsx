@@ -254,16 +254,28 @@ function getDurationMs(createdAt: string, finishedAt?: string | null): number | 
   return end - start;
 }
 
+interface NerdStatItem {
+  key: string;
+  icon: React.ReactNode;
+  label: string;
+}
+
+// Context window 占用单独返回(渲染时推到行尾右对齐),与 token / 速度 / 时长那组左对齐分开。
+interface NerdStats {
+  items: NerdStatItem[];
+  context: NerdStatItem | null;
+}
+
 function getNerdStats(
   usage: TokenUsage,
   createdAt: string,
   finishedAt: string | null | undefined,
   t: TFunction,
   liveContextLimit?: number | null,
-) {
-  const stats: Array<{ key: string; icon: React.ReactNode; label: string }> = [];
+): NerdStats {
+  const items: NerdStatItem[] = [];
 
-  stats.push({
+  items.push({
     key: "prompt",
     icon: <ArrowUp className="size-3" />,
     label:
@@ -277,7 +289,7 @@ function getNerdStats(
           }),
   });
 
-  stats.push({
+  items.push({
     key: "completion",
     icon: <ArrowDown className="size-3" />,
     label: t("chat_message.completion_tokens", {
@@ -290,7 +302,7 @@ function getNerdStats(
     const durationSeconds = durationMs / 1000;
     const tps = usage.completionTokens / durationSeconds;
 
-    stats.push({
+    items.push({
       key: "speed",
       icon: <Zap className="size-3" />,
       label: t("chat_message.tokens_per_second", {
@@ -298,7 +310,7 @@ function getNerdStats(
       }),
     });
 
-    stats.push({
+    items.push({
       key: "duration",
       icon: <Clock3 className="size-3" />,
       label: t("chat_message.duration_seconds", {
@@ -307,26 +319,30 @@ function getNerdStats(
     });
   }
 
-  // Context window 占用:分子 = 当前上下文(= 输入 token),分母 = 模型最大上下文(来自
-  // models.dev 目录,后端按 modelId 匹配)。匹配不到分母则只显示分子;promptTokens 为 0 则不显示。
-  if (usage.promptTokens > 0) {
-    const used = usage.promptTokens >= 1000 ? `${(usage.promptTokens / 1000).toFixed(1)}k` : String(usage.promptTokens);
-    // 分母优先用当前选中模型的 contextLimit(切模型即更新);loading(undefined)或查不到(null)
-    // 时回退到该消息生成时的快照(usage.contextLimit),避免切换瞬间分母闪烁/消失。
+  // Context window 占用:分子 = 累积上下文 = promptTokens(本轮输入,含全部历史 + 系统提示)
+  // + completionTokens(本轮输出)。这是"这条消息之后,对话窗口里一共有多少 token"——下一轮
+  // 发送时 prompt 会包含的总量。单看 promptTokens 会漏掉刚生成的回复,显得偏小(例如 17 而非
+  // 771)。分母 = 模型最大上下文(来自 models.dev 目录,后端按 modelId 匹配);匹配不到则只显示
+  // 分子。分母优先用当前选中模型的 contextLimit(切模型即更新),loading / 查不到时回退到该消息
+  // 生成时的快照(usage.contextLimit),避免切换瞬间分母闪烁/消失。
+  const contextTokens = usage.promptTokens + usage.completionTokens;
+  let context: NerdStatItem | null = null;
+  if (contextTokens > 0) {
+    const used = contextTokens >= 1000 ? `${(contextTokens / 1000).toFixed(1)}k` : String(contextTokens);
     const liveValue = liveContextLimit != null && liveContextLimit > 0 ? liveContextLimit : null;
     const snapValue = usage.contextLimit && usage.contextLimit > 0 ? usage.contextLimit : null;
     const limitValue = liveValue ?? snapValue;
     const limit = limitValue != null
       ? limitValue >= 1000 ? `${(limitValue / 1000).toFixed(1)}k` : String(limitValue)
       : null;
-    stats.push({
+    context = {
       key: "context",
       icon: <Gauge className="size-3" />,
       label: limit ? `${used} / ${limit}` : used,
-    });
+    };
   }
 
-  return stats;
+  return { items, context };
 }
 
 function parseToolOutputJson(text: string): unknown {
@@ -855,22 +871,37 @@ const ChatMessageNerdLineRow = React.memo(({
     return null;
   }
 
-  const stats = getNerdStats(message.usage, message.createdAt, message.finishedAt, t, liveContextLimit);
-  if (stats.length === 0) return null;
+  const { items, context } = getNerdStats(message.usage, message.createdAt, message.finishedAt, t, liveContextLimit);
+  if (items.length === 0 && !context) return null;
+
+  const renderStat = (item: { key: string; icon: React.ReactNode; label: string }) => (
+    <div key={item.key} className="inline-flex items-center gap-1">
+      {item.icon}
+      <span>{item.label}</span>
+    </div>
+  );
+
+  // 上下文占用单独推到行尾右对齐,与 token / 速度 / 时长那组左对齐分开 —— 更易扫读"还剩多少额度"。
+  // 无上下文项时(items 有但 context 为空)退化为单组,保持 alignRight 的左右贴边行为。
+  if (!context) {
+    return (
+      <div
+        className={cn(
+          "flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-muted-foreground/50",
+          alignRight ? "justify-end" : "justify-start",
+        )}
+      >
+        {items.map(renderStat)}
+      </div>
+    );
+  }
 
   return (
-    <div
-      className={cn(
-        "flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-muted-foreground/50",
-        alignRight ? "justify-end" : "justify-start",
-      )}
-    >
-      {stats.map((item) => (
-        <div key={item.key} className="inline-flex items-center gap-1">
-          {item.icon}
-          <span>{item.label}</span>
-        </div>
-      ))}
+    <div className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1 px-1 text-[11px] text-muted-foreground/50">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+        {items.map(renderStat)}
+      </div>
+      {renderStat(context)}
     </div>
   );
 });

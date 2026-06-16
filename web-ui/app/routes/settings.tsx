@@ -625,7 +625,8 @@ export default function SettingsPage() {
       </aside>
       <main className="min-w-0 flex-1">
         <ScrollArea className="h-svh">
-          <div className="mx-auto w-full max-w-5xl px-6 py-6">
+          <div className="mx-auto w-full max-w-5xl px-6 pb-6 pt-9">
+            {/* pt-9 与左侧 aside 顶部对齐,让出沉浸式透明标题栏高度,避免各板块内容贴顶。 */}
             {section === "general" && <GeneralSection settings={settings} onSettings={updateLocal} />}
             {section === "providers" && <ProvidersSection settings={settings} onSettings={updateLocal} />}
             {section === "models" && <DefaultModelsSection settings={settings} onSettings={updateLocal} />}

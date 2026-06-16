@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { ImagePlus, Loader2, Plus, Trash2, WandSparkles, X } from "lucide-react";
+import { ArrowLeft, ImagePlus, Loader2, Plus, Trash2, WandSparkles, X } from "lucide-react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 
@@ -171,14 +171,19 @@ export default function ImagesPage() {
 
   return (
     <div className="flex h-screen bg-background text-foreground">
-      <aside className="hidden w-[340px] shrink-0 border-r bg-sidebar/80 p-4 md:block">
+      {/* aside 顶部 pt-9 让出沉浸式透明标题栏高度,与设置页一致。 */}
+      <aside className="hidden w-[340px] shrink-0 border-r bg-sidebar/80 px-4 pb-4 pt-9 md:block">
         <div className="flex items-center justify-between">
-          <Link className="text-sm text-muted-foreground transition hover:text-foreground" to="/">返回聊天</Link>
+          <Button asChild size="icon-sm" variant="ghost">
+            <Link to="/" aria-label="返回聊天" title="返回聊天">
+              <ArrowLeft className="size-4" />
+            </Link>
+          </Button>
           <Button asChild variant="outline" size="sm">
             <Link to="/settings?section=models">模型设置</Link>
           </Button>
         </div>
-        <div className="mt-6 space-y-1">
+        <div className="mt-7 space-y-1">
           <div className="flex items-center gap-2 text-xl font-semibold">
             <WandSparkles className="size-5 text-primary" />
             图像生成
@@ -238,7 +243,7 @@ export default function ImagesPage() {
           </div>
         </div>
         <ScrollArea className="flex-1">
-          <div className="mx-auto max-w-6xl space-y-6 p-4 md:p-8">
+          <div className="mx-auto max-w-6xl space-y-6 p-4 pb-8 md:pt-9">
             <section className="rounded-lg border bg-card p-4">
               <Textarea
                 value={prompt}

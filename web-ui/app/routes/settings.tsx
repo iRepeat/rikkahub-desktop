@@ -2819,6 +2819,7 @@ const TTS_LANGUAGES_XAI: { value: string; label: string }[] = [
 ];
 
 function TtsSettingsPanel({ settings, onSettings }: { settings: Settings; onSettings: (settings: Settings) => void }) {
+  const { t } = useTranslation();
   const providers = settings.ttsProviders ?? [];
   const [selectedId, setSelectedId] = React.useState(settings.selectedTTSProviderId ?? providers[0]?.id ?? "");
   const selected = providers.find((provider) => provider.id === selectedId) ?? providers[0];
@@ -2892,20 +2893,20 @@ function TtsSettingsPanel({ settings, onSettings }: { settings: Settings; onSett
       // selected one (which may be a different provider entirely). The draft must be
       // already saved for this to work; patchDraft auto-saves on every keystroke so
       // by the time the user clicks test the latest config is persisted server-side.
-      const response = await api.postBlob("tts/speech", { text: "这是一段测试语音，用于验证当前 TTS 配置是否生效。", providerId: draft.id });
+      const response = await api.postBlob("tts/speech", { text: t("settings:speech.test_text"), providerId: draft.id });
       const contentType = response.headers.get("Content-Type") ?? "";
       if (contentType.includes("application/json")) {
         // System TTS path — Windows is speaking on-device; nothing for us to play.
-        toast.success("已通过系统语音播报测试文本");
+        toast.success(t("settings:speech.test_system_done"));
         return;
       }
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       await playAudio(testPlaybackKey, url, url);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "TTS 测试失败");
+      toast.error(error instanceof Error ? error.message : t("settings:speech.test_failed"));
     }
-  }, [draft, isTestPlaying, testPlaybackKey]);
+  }, [draft, isTestPlaying, testPlaybackKey, t]);
 
   const numericInput = (key: keyof TtsProviderProfile, label: string, description: string, min: number, max: number, step = 0.05) => {
     if (!draft) return null;
@@ -2935,9 +2936,9 @@ function TtsSettingsPanel({ settings, onSettings }: { settings: Settings; onSett
     <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
       <div className="rounded-lg border bg-card">
         <div className="flex items-center justify-between gap-3 border-b p-3">
-          <div className="text-sm font-medium">TTS 服务</div>
+          <div className="text-sm font-medium">{t("settings:speech.tts_services")}</div>
           <Select onValueChange={(value) => void addProvider(value as TtsProviderType)}>
-            <SelectTrigger className="h-8 w-28"><SelectValue placeholder="新增" /></SelectTrigger>
+            <SelectTrigger className="h-8 w-28"><SelectValue placeholder={t("settings:speech.add")} /></SelectTrigger>
             <SelectContent>
               <SelectItem value="system">System</SelectItem>
               <SelectItem value="openai">OpenAI</SelectItem>
@@ -2969,7 +2970,7 @@ function TtsSettingsPanel({ settings, onSettings }: { settings: Settings; onSett
               </span>
             </SortableRow>
           ))}
-          {providers.length === 0 ? <div className="p-6 text-center text-sm text-muted-foreground">暂无 TTS 服务，点击新增开始配置。</div> : null}
+          {providers.length === 0 ? <div className="p-6 text-center text-sm text-muted-foreground">{t("settings:speech.tts_empty")}</div> : null}
         </div>
       </div>
 
@@ -2978,42 +2979,42 @@ function TtsSettingsPanel({ settings, onSettings }: { settings: Settings; onSett
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="text-lg font-semibold">{draft.name}</div>
-              <div className="text-sm text-muted-foreground">消息下方语音播报会调用当前 provider，并写入请求日志。</div>
+              <div className="text-sm text-muted-foreground">{t("settings:speech.tts_card_desc")}</div>
             </div>
             <div className="flex items-center gap-2">
-              <Button variant="outline" onClick={() => void handleTest()} title="使用当前配置朗读一段测试文本">
+              <Button variant="outline" onClick={() => void handleTest()} title={t("settings:speech.test_title")}>
                 {isTestPlaying ? <Square className="size-4" /> : <Volume2 className="size-4" />}
-                {isTestPlaying ? "停止" : "测试"}
+                {isTestPlaying ? t("settings:speech.stop") : t("settings:speech.test")}
               </Button>
               <Button variant={draft.id === settings.selectedTTSProviderId ? "secondary" : "outline"} onClick={() => void selectProvider(draft.id)}>
-                {draft.id === settings.selectedTTSProviderId ? "已选择" : "设为当前"}
+                {draft.id === settings.selectedTTSProviderId ? t("settings:speech.selected") : t("settings:speech.set_current")}
               </Button>
-              {draft.type !== "system" ? <Button variant="outline" onClick={() => void removeProvider()}><Trash2 className="size-4" />删除</Button> : null}
+              {draft.type !== "system" ? <Button variant="outline" onClick={() => void removeProvider()}><Trash2 className="size-4" />{t("settings:common.delete")}</Button> : null}
             </div>
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
-              <div className="text-sm font-medium">名称</div>
+              <div className="text-sm font-medium">{t("settings:speech.name")}</div>
               <Input value={draft.name} onChange={(event) => patchDraft({ name: event.target.value })} />
             </div>
             <div className="space-y-2">
-              <div className="text-sm font-medium">类型</div>
+              <div className="text-sm font-medium">{t("settings:speech.type")}</div>
               <Input value={draft.type} readOnly />
             </div>
             {draft.type !== "system" ? (
               <>
                 <div className="space-y-2 md:col-span-2">
-                  <div className="text-sm font-medium">API Key</div>
+                  <div className="text-sm font-medium">{t("settings:speech.api_key")}</div>
                   <PasswordInput value={draft.apiKey ?? ""} onChange={(apiKey) => patchDraft({ apiKey })} />
                 </div>
                 <div className="space-y-2 md:col-span-2">
-                  <div className="text-sm font-medium">Base URL</div>
+                  <div className="text-sm font-medium">{t("settings:speech.base_url")}</div>
                   <Input value={draft.baseUrl ?? ""} onChange={(event) => patchDraft({ baseUrl: event.target.value })} />
                 </div>
                 {draft.type !== "xai" ? (
                   <div className="space-y-2">
-                    <div className="text-sm font-medium">模型</div>
+                    <div className="text-sm font-medium">{t("settings:speech.model")}</div>
                     <Input value={draft.model ?? ""} onChange={(event) => patchDraft({ model: event.target.value })} />
                   </div>
                 ) : null}
@@ -3056,12 +3057,12 @@ function TtsSettingsPanel({ settings, onSettings }: { settings: Settings; onSett
                             }
                           }}
                         >
-                          <SelectTrigger className="flex-1"><SelectValue placeholder="选择声音" /></SelectTrigger>
+                          <SelectTrigger className="flex-1"><SelectValue placeholder={t("settings:speech.select_voice")} /></SelectTrigger>
                           <SelectContent>
                             {TTS_VOICES_MINIMAX.map((voice) => (
                               <SelectItem key={voice} value={voice}>{voice}</SelectItem>
                             ))}
-                            <SelectItem value="__custom__">自定义...</SelectItem>
+                            <SelectItem value="__custom__">{t("settings:speech.custom_voice")}</SelectItem>
                           </SelectContent>
                         </Select>
                         {dropdownValue === "__custom__" ? (
@@ -3069,7 +3070,7 @@ function TtsSettingsPanel({ settings, onSettings }: { settings: Settings; onSett
                             className="flex-1"
                             value={voiceId}
                             onChange={(event) => patchDraft({ voiceId: event.target.value })}
-                            placeholder="填入自定义 voice_id"
+                            placeholder={t("settings:speech.custom_voice_ph")}
                           />
                         ) : null}
                       </div>
@@ -3080,7 +3081,7 @@ function TtsSettingsPanel({ settings, onSettings }: { settings: Settings; onSett
                   <div className="space-y-2">
                     <div className="text-sm font-medium">Voice ID</div>
                     <Select value={draft.voiceId ?? ""} onValueChange={(value) => patchDraft({ voiceId: value })}>
-                      <SelectTrigger><SelectValue placeholder="选择声音" /></SelectTrigger>
+                      <SelectTrigger><SelectValue placeholder={t("settings:speech.select_voice")} /></SelectTrigger>
                       <SelectContent>
                         {TTS_VOICES_XAI.map((voice) => (
                           <SelectItem key={voice} value={voice}>{voice}</SelectItem>
@@ -3093,7 +3094,7 @@ function TtsSettingsPanel({ settings, onSettings }: { settings: Settings; onSett
                   <div className="space-y-2">
                     <div className="text-sm font-medium">Voice</div>
                     <Select value={draft.voice ?? ""} onValueChange={(value) => patchDraft({ voice: value })}>
-                      <SelectTrigger><SelectValue placeholder="选择声音" /></SelectTrigger>
+                      <SelectTrigger><SelectValue placeholder={t("settings:speech.select_voice")} /></SelectTrigger>
                       <SelectContent>
                         {(draft.type === "openai" ? TTS_VOICES_OPENAI : draft.type === "qwen" ? TTS_VOICES_QWEN : TTS_VOICES_GROQ).map((voice) => (
                           <SelectItem key={voice} value={voice}>{voice}</SelectItem>
@@ -3114,7 +3115,7 @@ function TtsSettingsPanel({ settings, onSettings }: { settings: Settings; onSett
                   <div className="space-y-2">
                     <div className="text-sm font-medium">Language Type</div>
                     <Select value={draft.languageType ?? "Auto"} onValueChange={(value) => patchDraft({ languageType: value })}>
-                      <SelectTrigger><SelectValue placeholder="选择语种" /></SelectTrigger>
+                      <SelectTrigger><SelectValue placeholder={t("settings:speech.select_lang_type")} /></SelectTrigger>
                       <SelectContent>
                         {TTS_LANGUAGE_TYPES_QWEN.map((lang) => (
                           <SelectItem key={lang} value={lang}>{lang}</SelectItem>
@@ -3127,7 +3128,7 @@ function TtsSettingsPanel({ settings, onSettings }: { settings: Settings; onSett
                   <div className="space-y-2">
                     <div className="text-sm font-medium">Language</div>
                     <Select value={draft.language ?? "auto"} onValueChange={(value) => patchDraft({ language: value })}>
-                      <SelectTrigger><SelectValue placeholder="选择语言" /></SelectTrigger>
+                      <SelectTrigger><SelectValue placeholder={t("settings:speech.select_language")} /></SelectTrigger>
                       <SelectContent>
                         {TTS_LANGUAGES_XAI.map((lang) => (
                           <SelectItem key={lang.value} value={lang.value}>{lang.label}</SelectItem>
@@ -3151,35 +3152,36 @@ function TtsSettingsPanel({ settings, onSettings }: { settings: Settings; onSett
                         value={(draft.emotion ?? "") === "" ? "__auto__" : draft.emotion}
                         onValueChange={(value) => patchDraft({ emotion: value === "__auto__" ? "" : value })}
                       >
-                        <SelectTrigger><SelectValue placeholder="选择情感" /></SelectTrigger>
+                        <SelectTrigger><SelectValue placeholder={t("settings:speech.select_emotion")} /></SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="__auto__">自动（由 MiniMax 决定）</SelectItem>
+                          <SelectItem value="__auto__">{t("settings:speech.emotion_auto")}</SelectItem>
                           {TTS_EMOTIONS_MINIMAX.map((emotion) => (
                             <SelectItem key={emotion} value={emotion}>{emotion}</SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className="md:col-span-2">{numericInput("speed", "Speed", "MiniMax 语速。", 0.5, 2, 0.05)}</div>
+                    <div className="md:col-span-2">{numericInput("speed", "Speed", t("settings:speech.minimax_speed_desc"), 0.5, 2, 0.05)}</div>
                   </>
                 ) : null}
               </>
             ) : (
               <div className="space-y-5 md:col-span-2">
-                {numericInput("speechRate", "Speech Rate", "系统语音语速，1 为默认。", 0.2, 3, 0.05)}
-                {numericInput("pitch", "Pitch", "系统语音当前不支持直接调整音高，此设置仅会随配置导出。", 0.2, 3, 0.05)}
+                {numericInput("speechRate", "Speech Rate", t("settings:speech.system_rate_desc"), 0.2, 3, 0.05)}
+                {numericInput("pitch", "Pitch", t("settings:speech.system_pitch_desc"), 0.2, 3, 0.05)}
               </div>
             )}
           </div>
         </div>
       ) : (
-        <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">请选择或新增 TTS 服务。</div>
+        <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">{t("settings:speech.select_tts")}</div>
       )}
     </div>
   );
 }
 
 function SpeechSection({ settings, onSettings }: { settings: Settings; onSettings: (settings: Settings) => void }) {
+  const { t } = useTranslation();
   const providers = settings.asrProviders ?? [];
   const [selectedId, setSelectedId] = React.useState(settings.selectedASRProviderId ?? providers[0]?.id ?? "");
   const selected = providers.find((provider) => provider.id === selectedId) ?? providers[0];
@@ -3260,16 +3262,16 @@ function SpeechSection({ settings, onSettings }: { settings: Settings; onSetting
 
   return (
     <>
-      <SectionHeader icon={Mic} title="文字转语音" subtitle="TTS provider 用于消息语音播报，ASR provider 用于输入框实时语音识别。" />
+      <SectionHeader icon={Mic} title={t("settings:speech.tts_title")} subtitle={t("settings:speech.tts_subtitle")} />
       <TtsSettingsPanel settings={settings} onSettings={onSettings} />
       <Separator className="my-8" />
-      <SectionHeader icon={Mic} title="语音识别" subtitle="支持 OpenAI Realtime、DashScope、Volcengine；通过实时 PCM WebSocket 完成转写。" />
+      <SectionHeader icon={Mic} title={t("settings:speech.asr_title")} subtitle={t("settings:speech.asr_subtitle")} />
       <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
         <div className="rounded-lg border bg-card">
           <div className="flex items-center justify-between gap-3 border-b p-3">
-            <div className="text-sm font-medium">ASR 服务</div>
+            <div className="text-sm font-medium">{t("settings:speech.asr_services")}</div>
             <Select onValueChange={(value) => void addProvider(value as AsrProviderType)}>
-              <SelectTrigger className="h-8 w-28"><SelectValue placeholder="新增" /></SelectTrigger>
+              <SelectTrigger className="h-8 w-28"><SelectValue placeholder={t("settings:speech.add")} /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="openai_realtime">OpenAI</SelectItem>
                 <SelectItem value="dashscope">DashScope</SelectItem>
@@ -3296,7 +3298,7 @@ function SpeechSection({ settings, onSettings }: { settings: Settings; onSetting
                 </span>
               </SortableRow>
             ))}
-            {providers.length === 0 ? <div className="p-6 text-center text-sm text-muted-foreground">暂无 ASR 服务，点击新增开始配置。</div> : null}
+            {providers.length === 0 ? <div className="p-6 text-center text-sm text-muted-foreground">{t("settings:speech.asr_empty")}</div> : null}
           </div>
         </div>
 
@@ -3305,35 +3307,35 @@ function SpeechSection({ settings, onSettings }: { settings: Settings; onSetting
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="text-lg font-semibold">{draft.name}</div>
-                <div className="text-sm text-muted-foreground">为每个 ASR provider 配置鉴权与音频参数。</div>
+                <div className="text-sm text-muted-foreground">{t("settings:speech.asr_card_desc")}</div>
               </div>
               <div className="flex items-center gap-2">
                 <Button variant={draft.id === settings.selectedASRProviderId ? "secondary" : "outline"} onClick={() => void selectProvider(draft.id)}>
-                  {draft.id === settings.selectedASRProviderId ? "已选择" : "设为当前"}
+                  {draft.id === settings.selectedASRProviderId ? t("settings:speech.selected") : t("settings:speech.set_current")}
                 </Button>
-                <Button variant="outline" onClick={() => void removeProvider()}><Trash2 className="size-4" />删除</Button>
+                <Button variant="outline" onClick={() => void removeProvider()}><Trash2 className="size-4" />{t("settings:common.delete")}</Button>
               </div>
             </div>
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
-                <div className="text-sm font-medium">名称</div>
+                <div className="text-sm font-medium">{t("settings:speech.name")}</div>
                 <Input value={draft.name} onChange={(event) => patchDraft({ name: event.target.value })} />
               </div>
               <div className="space-y-2">
-                <div className="text-sm font-medium">类型</div>
+                <div className="text-sm font-medium">{t("settings:speech.type")}</div>
                 <Input value={draft.type} readOnly />
               </div>
               <div className="space-y-2 md:col-span-2">
-                <div className="text-sm font-medium">API Key</div>
+                <div className="text-sm font-medium">{t("settings:speech.api_key")}</div>
                 <PasswordInput value={draft.apiKey ?? ""} onChange={(apiKey) => patchDraft({ apiKey })} />
               </div>
               <div className="space-y-2 md:col-span-2">
-                <div className="text-sm font-medium">WebSocket URL</div>
+                <div className="text-sm font-medium">{t("settings:speech.ws_url")}</div>
                 <Input value={draft.websocketUrl ?? ""} onChange={(event) => patchDraft({ websocketUrl: event.target.value })} />
               </div>
               {draft.type !== "volcengine" ? (
                 <div className="space-y-2">
-                  <div className="text-sm font-medium">模型</div>
+                  <div className="text-sm font-medium">{t("settings:speech.model")}</div>
                   <Input value={draft.model ?? ""} onChange={(event) => patchDraft({ model: event.target.value })} placeholder={draft.type === "dashscope" ? "qwen3-asr-flash-realtime" : "gpt-4o-transcribe"} />
                 </div>
               ) : null}
@@ -3344,25 +3346,25 @@ function SpeechSection({ settings, onSettings }: { settings: Settings; onSetting
                 </div>
               ) : null}
               <div className="space-y-2">
-                <div className="text-sm font-medium">语言</div>
+                <div className="text-sm font-medium">{t("settings:speech.language")}</div>
                 <Input value={draft.language ?? ""} onChange={(event) => patchDraft({ language: event.target.value })} placeholder={draft.type === "dashscope" ? "zh" : "auto"} />
               </div>
               {draft.type === "openai_realtime" ? (
                 <div className="space-y-2 md:col-span-2">
-                  <div className="text-sm font-medium">Prompt</div>
+                  <div className="text-sm font-medium">{t("settings:speech.prompt")}</div>
                   <Textarea value={draft.prompt ?? ""} onChange={(event) => patchDraft({ prompt: event.target.value })} placeholder="Optional" />
                 </div>
               ) : null}
             </div>
             <div className="space-y-5">
-              {draft.type !== "volcengine" ? numericInput("sampleRate", "Sample Rate", "默认 OpenAI 24000，DashScope 16000。", 8000, 48000, 1000) : null}
-              {draft.type !== "volcengine" ? numericInput("vadThreshold", "VAD Threshold", "语音活动检测阈值。", 0, 1, 0.05) : null}
-              {draft.type === "openai_realtime" ? numericInput("prefixPaddingMs", "Prefix Padding", "默认 300ms。", 0, 2000, 50) : null}
-              {draft.type !== "volcengine" ? numericInput("silenceDurationMs", "Silence Duration", "静音结束判定时长。", 100, 5000, 100) : null}
+              {draft.type !== "volcengine" ? numericInput("sampleRate", t("settings:speech.sample_rate"), t("settings:speech.sample_rate_desc"), 8000, 48000, 1000) : null}
+              {draft.type !== "volcengine" ? numericInput("vadThreshold", t("settings:speech.vad_threshold"), t("settings:speech.vad_threshold_desc"), 0, 1, 0.05) : null}
+              {draft.type === "openai_realtime" ? numericInput("prefixPaddingMs", t("settings:speech.prefix_padding"), t("settings:speech.prefix_padding_desc"), 0, 2000, 50) : null}
+              {draft.type !== "volcengine" ? numericInput("silenceDurationMs", t("settings:speech.silence_duration"), t("settings:speech.silence_duration_desc"), 100, 5000, 100) : null}
             </div>
           </div>
         ) : (
-          <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">请选择或新增 ASR 服务。</div>
+          <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">{t("settings:speech.select_asr")}</div>
         )}
       </div>
     </>

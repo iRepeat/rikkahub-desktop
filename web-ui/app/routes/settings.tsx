@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   ArrowLeft,
@@ -189,19 +190,19 @@ interface AssistantMemoryInfo {
   updatedAt: number;
 }
 
-const navItems: Array<{ id: Section; label: string; icon: React.ComponentType<{ className?: string }> }> = [
-  { id: "general", label: "通用设置", icon: UserRound },
-  { id: "assistants", label: "助手", icon: Bot },
-  { id: "providers", label: "供应商", icon: KeyRound },
-  { id: "models", label: "默认模型与提示词", icon: Settings2 },
-  { id: "search", label: "搜索服务", icon: Search },
-  { id: "mcp", label: "MCP 与拓展", icon: CopyPlus },
-  { id: "speech", label: "语音", icon: Mic },
-  { id: "data", label: "数据设置", icon: Database },
-  { id: "stats", label: "统计", icon: Database },
-  { id: "logs", label: "请求日志", icon: FileClock },
-  { id: "proxy", label: "代理与端口", icon: Globe },
-  { id: "about", label: "关于", icon: CheckCircle2 },
+const navItems: Array<{ id: Section; labelKey: string; icon: React.ComponentType<{ className?: string }> }> = [
+  { id: "general", labelKey: "settings:nav.general", icon: UserRound },
+  { id: "assistants", labelKey: "settings:nav.assistants", icon: Bot },
+  { id: "providers", labelKey: "settings:nav.providers", icon: KeyRound },
+  { id: "models", labelKey: "settings:nav.models", icon: Settings2 },
+  { id: "search", labelKey: "settings:nav.search", icon: Search },
+  { id: "mcp", labelKey: "settings:nav.mcp", icon: CopyPlus },
+  { id: "speech", labelKey: "settings:nav.speech", icon: Mic },
+  { id: "data", labelKey: "settings:nav.data", icon: Database },
+  { id: "stats", labelKey: "settings:nav.stats", icon: Database },
+  { id: "logs", labelKey: "settings:nav.logs", icon: FileClock },
+  { id: "proxy", labelKey: "settings:nav.proxy", icon: Globe },
+  { id: "about", labelKey: "settings:nav.about", icon: CheckCircle2 },
 ];
 
 function textValue(value: unknown): string {
@@ -538,6 +539,7 @@ export function meta() {
 }
 
 export default function SettingsPage() {
+  const { t } = useTranslation();
   const streamedSettings = useSettingsStore((state) => state.settings);
   const setStreamedSettings = useSettingsStore((state) => state.setSettings);
   const [settings, setSettings] = React.useState<Settings | null>(streamedSettings);
@@ -600,7 +602,7 @@ export default function SettingsPage() {
           </Button>
           <div>
             <div className="text-sm font-semibold">RikkaHub PC</div>
-            <div className="text-xs text-muted-foreground">本地设置中心</div>
+            <div className="text-xs text-muted-foreground">{t("settings:nav.subtitle")}</div>
           </div>
         </div>
         <nav className="space-y-1 p-2">
@@ -618,7 +620,7 @@ export default function SettingsPage() {
                 onClick={() => setSection(item.id)}
               >
                 <Icon className="size-4" />
-                {item.label}
+                {t(item.labelKey)}
               </button>
             );
           })}

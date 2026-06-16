@@ -1,0 +1,17 @@
+{
+  "nav": {
+    "subtitle": "本地设置中心",
+    "general": "通用设置",
+    "assistants": "助手",
+    "providers": "供应商",
+    "models": "默认模型与提示词",
+    "search": "搜索服务",
+    "mcp": "MCP 与拓展",
+    "speech": "语音",
+    "data": "数据设置",
+    "stats": "统计",
+    "logs": "请求日志",
+    "proxy": "代理与端口",
+    "about": "关于"
+  }
+}

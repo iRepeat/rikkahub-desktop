@@ -1,0 +1,17 @@
+{
+  "nav": {
+    "subtitle": "Local settings",
+    "general": "General",
+    "assistants": "Assistants",
+    "providers": "Providers",
+    "models": "Default models & prompts",
+    "search": "Search services",
+    "mcp": "MCP & extensions",
+    "speech": "Speech",
+    "data": "Data",
+    "stats": "Statistics",
+    "logs": "Request logs",
+    "proxy": "Proxy & port",
+    "about": "About"
+  }
+}

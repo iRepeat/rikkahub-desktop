@@ -23,6 +23,7 @@ import { normalizeImageForModelUpload } from "~/lib/image-normalize";
 import api from "~/services/api";
 import { useSettingsStore } from "~/stores/app-store";
 import type { ProviderModel } from "~/types";
+import i18n from "~/i18n";
 
 interface UploadedFile {
   id: number;
@@ -68,7 +69,7 @@ const ASPECT_RATIOS = [
 ];
 
 export function meta() {
-  return [{ title: "图像生成 - RikkaHub" }];
+  return [{ title: `${i18n.t("common:image_page.title")} - RikkaHub` }];
 }
 
 function modelLabel(model: ProviderModel, fallback: string) {

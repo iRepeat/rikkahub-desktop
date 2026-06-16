@@ -101,6 +101,7 @@ function ConversationSystemPromptButton({
   const [draft, setDraft] = React.useState(value ?? "");
   const [saving, setSaving] = React.useState(false);
   const hasCustomPrompt = Boolean(value?.trim());
+  const { t } = useTranslation("page");
 
   React.useEffect(() => {
     setDraft(value ?? "");
@@ -126,7 +127,7 @@ function ConversationSystemPromptButton({
         onClick={() => setExpanded((current) => !current)}
       >
         <Pencil className="size-3.5" />
-        <span>{hasCustomPrompt ? "会话系统提示词 ✎" : "会话系统提示词"}</span>
+        <span>{hasCustomPrompt ? t("conversations.custom_prompt.button_active") : t("conversations.custom_prompt.button")}</span>
       </Button>
       {expanded ? (
         <div className="mt-2 w-full max-w-3xl space-y-2">
@@ -134,7 +135,7 @@ function ConversationSystemPromptButton({
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             className="min-h-28 resize-y"
-            placeholder="覆盖当前会话的 system prompt"
+            placeholder={t("conversations.custom_prompt.placeholder")}
           />
           <div className="flex justify-end gap-2">
             {hasCustomPrompt ? (
@@ -145,12 +146,12 @@ function ConversationSystemPromptButton({
                 disabled={saving}
                 onClick={() => void save("")}
               >
-                清除
+                {t("conversations.custom_prompt.clear")}
               </Button>
             ) : null}
             <Button type="button" size="sm" disabled={saving} onClick={() => void save(draft)}>
               {saving ? <Loader2 className="size-4 animate-spin" /> : null}
-              保存
+              {t("conversations.custom_prompt.save")}
             </Button>
           </div>
         </div>
@@ -185,14 +186,14 @@ const EMPTY_SUGGESTIONS: string[] = [];
 const COMPRESS_TOKEN_OPTIONS = [500, 1000, 2000, 4000];
 const COMPRESS_KEEP_OPTIONS = [0, 16, 32, 64];
 const TRANSLATION_LANGUAGES = [
-  { value: "zh-CN", label: "简体中文" },
-  { value: "zh-TW", label: "繁体中文" },
-  { value: "en-US", label: "English" },
-  { value: "ja-JP", label: "日本語" },
-  { value: "ko-KR", label: "한국어" },
-  { value: "fr-FR", label: "Français" },
-  { value: "de-DE", label: "Deutsch" },
-  { value: "es-ES", label: "Español" },
+  { value: "zh-CN" },
+  { value: "zh-TW" },
+  { value: "en-US" },
+  { value: "ja-JP" },
+  { value: "ko-KR" },
+  { value: "fr-FR" },
+  { value: "de-DE" },
+  { value: "es-ES" },
 ];
 
 interface EditDraft {
@@ -210,6 +211,7 @@ interface EditingSession {
 
 function ThemeToggleButton() {
   const { theme, setTheme } = useTheme();
+  const { t } = useTranslation("page");
   // Resolve "system" to a concrete light/dark, so the toggle always lands on the opposite mode.
   const isDark =
     theme === "dark" ||
@@ -222,8 +224,8 @@ function ThemeToggleButton() {
       variant="ghost"
       size="icon-sm"
       onClick={() => setTheme(isDark ? "light" : "dark")}
-      aria-label={isDark ? "切换到浅色模式" : "切换到深色模式"}
-      title={isDark ? "切换到浅色模式" : "切换到深色模式"}
+      aria-label={isDark ? t("conversations.theme_toggle.to_light") : t("conversations.theme_toggle.to_dark")}
+      title={isDark ? t("conversations.theme_toggle.to_light") : t("conversations.theme_toggle.to_dark")}
     >
       {isDark ? <Moon className="size-4" /> : <Sun className="size-4" />}
     </Button>
@@ -1141,7 +1143,7 @@ function ConversationsPageInner() {
       refreshDetail();
       refreshList();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "翻译失败");
+      toast.error(error instanceof Error ? error.message : t("conversations.translate.failed"));
     } finally {
       setTranslatingMessage(false);
     }
@@ -1313,7 +1315,7 @@ function ConversationsPageInner() {
         .join("")
         .trim();
       if (!text) continue;
-      lines.push(`${message.role === "USER" ? "用户" : "助手"}: ${text}`);
+      lines.push(`${message.role === "USER" ? t("conversations.optimize_context.user") : t("conversations.optimize_context.assistant")}: ${text}`);
     }
     return lines.join("\n\n").slice(0, 4000);
   }, [selectedNodeMessages]);
@@ -1334,9 +1336,9 @@ function ConversationsPageInner() {
       setCompressDialogOpen(false);
       await refreshDetail();
       refreshList();
-      toast.success("对话历史已压缩");
+      toast.success(t("conversations.compress.success"));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "压缩失败");
+      toast.error(error instanceof Error ? error.message : t("conversations.compress.failed"));
     } finally {
       setCompressing(false);
     }
@@ -1373,7 +1375,7 @@ function ConversationsPageInner() {
     setSystemPromptDialogOpen(false);
     refreshDetail();
     refreshList();
-    toast.success("会话系统提示词已保存");
+    toast.success(t("conversations.custom_prompt.saved"));
   }, [
     activeAssistantForConversation?.allowConversationSystemPrompt,
     activeId,
@@ -1392,7 +1394,7 @@ function ConversationsPageInner() {
       setSystemPromptDraft(systemPrompt);
       refreshDetail();
       refreshList();
-      toast.success("会话系统提示词已保存");
+      toast.success(t("conversations.custom_prompt.saved"));
     },
     [
       activeAssistantForConversation?.allowConversationSystemPrompt,
@@ -1554,8 +1556,8 @@ function ConversationsPageInner() {
               size="icon-sm"
               onClick={() => setSystemPromptDialogOpen(true)}
               disabled={!detail}
-              aria-label="编辑会话系统提示词"
-              title="编辑会话系统提示词"
+              aria-label={t("conversations.custom_prompt.edit_aria")}
+              title={t("conversations.custom_prompt.edit_aria")}
             >
               <Pencil className="size-4" />
             </Button>
@@ -1616,14 +1618,14 @@ function ConversationsPageInner() {
       >
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>压缩对话历史</DialogTitle>
+            <DialogTitle>{t("conversations.compress.dialog_title")}</DialogTitle>
             <DialogDescription>
-              使用默认模型与提示词中的上下文压缩模型，将较早消息压缩成摘要并保留最近消息。
+              {t("conversations.compress.dialog_description")}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-5">
             <div className="space-y-2">
-              <div className="text-sm font-medium">目标 Token</div>
+              <div className="text-sm font-medium">{t("conversations.compress.target_tokens")}</div>
               <div className="grid grid-cols-4 gap-2">
                 {COMPRESS_TOKEN_OPTIONS.map((value) => (
                   <Button
@@ -1646,7 +1648,7 @@ function ConversationsPageInner() {
               />
             </div>
             <div className="space-y-2">
-              <div className="text-sm font-medium">保留最近消息</div>
+              <div className="text-sm font-medium">{t("conversations.compress.keep_recent")}</div>
               <div className="grid grid-cols-4 gap-2">
                 {COMPRESS_KEEP_OPTIONS.map((value) => (
                   <Button
@@ -1661,11 +1663,11 @@ function ConversationsPageInner() {
               </div>
             </div>
             <label className="block space-y-2">
-              <span className="text-sm font-medium">额外要求</span>
+              <span className="text-sm font-medium">{t("conversations.compress.additional_prompt")}</span>
               <Textarea
                 value={compressAdditionalPrompt}
                 onChange={(event) => setCompressAdditionalPrompt(event.target.value)}
-                placeholder="可留空，例如：保留人物关系、关键参数和待办事项"
+                placeholder={t("conversations.compress.additional_placeholder")}
                 className="min-h-28"
               />
             </label>
@@ -1677,7 +1679,7 @@ function ConversationsPageInner() {
               disabled={compressing}
               onClick={() => setCompressDialogOpen(false)}
             >
-              取消
+              {t("conversations.compress.cancel")}
             </Button>
             <Button
               type="button"
@@ -1685,7 +1687,7 @@ function ConversationsPageInner() {
               onClick={() => void handleConfirmCompressConversation()}
             >
               {compressing ? <Loader2 className="size-4 animate-spin" /> : null}
-              开始压缩
+              {t("conversations.compress.start")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1698,8 +1700,8 @@ function ConversationsPageInner() {
       >
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>选择翻译语言</DialogTitle>
-            <DialogDescription>译文会保存在当前回复下方，不会进入下一轮上下文。</DialogDescription>
+            <DialogTitle>{t("conversations.translate.dialog_title")}</DialogTitle>
+            <DialogDescription>{t("conversations.translate.dialog_description")}</DialogDescription>
           </DialogHeader>
           <Select value={translationLanguage} onValueChange={setTranslationLanguage}>
             <SelectTrigger>
@@ -1708,7 +1710,7 @@ function ConversationsPageInner() {
             <SelectContent>
               {TRANSLATION_LANGUAGES.map((language) => (
                 <SelectItem key={language.value} value={language.value}>
-                  {language.label}
+                  {t(`conversations.translate.lang.${language.value}`)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -1720,7 +1722,7 @@ function ConversationsPageInner() {
               disabled={translatingMessage}
               onClick={() => setTranslationDialogMessageId(null)}
             >
-              取消
+              {t("conversations.translate.cancel")}
             </Button>
             <Button
               type="button"
@@ -1728,7 +1730,7 @@ function ConversationsPageInner() {
               onClick={() => void handleConfirmTranslateMessage()}
             >
               {translatingMessage ? <Loader2 className="size-4 animate-spin" /> : null}
-              翻译
+              {t("conversations.translate.confirm")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1737,23 +1739,23 @@ function ConversationsPageInner() {
       <Dialog open={systemPromptDialogOpen} onOpenChange={setSystemPromptDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>会话系统提示词</DialogTitle>
+            <DialogTitle>{t("conversations.custom_prompt.dialog_title")}</DialogTitle>
             <DialogDescription>
-              仅对当前会话生效。留空时会回退到助手默认系统提示词。
+              {t("conversations.custom_prompt.dialog_description")}
             </DialogDescription>
           </DialogHeader>
           <Textarea
             value={systemPromptDraft}
             onChange={(event) => setSystemPromptDraft(event.target.value)}
             className="min-h-72 font-mono text-xs leading-relaxed"
-            placeholder="在这里覆盖当前会话的 system prompt"
+            placeholder={t("conversations.custom_prompt.dialog_placeholder")}
           />
           <DialogFooter>
             <Button variant="outline" onClick={() => setSystemPromptDialogOpen(false)}>
-              取消
+              {t("conversations.custom_prompt.cancel")}
             </Button>
             <Button onClick={() => void handleSaveConversationSystemPrompt()} disabled={!activeId}>
-              保存
+              {t("conversations.custom_prompt.save")}
             </Button>
           </DialogFooter>
         </DialogContent>

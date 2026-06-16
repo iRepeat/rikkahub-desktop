@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { ArrowLeft, ImagePlus, Loader2, Plus, Trash2, WandSparkles, X } from "lucide-react";
 import { Link } from "react-router";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
 import { AIIcon } from "~/components/ui/ai-icon";
@@ -51,20 +52,21 @@ type ImageModelOption = ProviderModel & {
 };
 
 const ASPECT_RATIOS = [
-  { value: "square", label: "1:1", description: "1024x1024" },
-  { value: "landscape", label: "横向", description: "1536x1024 / 16:9" },
-  { value: "portrait", label: "竖向", description: "1024x1536 / 9:16" },
+  { value: "square", labelKey: "common:image_page.ratio_square", description: "1024x1024" },
+  { value: "landscape", labelKey: "common:image_page.ratio_landscape", description: "1536x1024 / 16:9" },
+  { value: "portrait", labelKey: "common:image_page.ratio_portrait", description: "1024x1536 / 9:16" },
 ];
 
 export function meta() {
   return [{ title: "图像生成 - RikkaHub" }];
 }
 
-function modelLabel(model?: ProviderModel) {
-  return model?.displayName || model?.modelId || "未选择";
+function modelLabel(model: ProviderModel, fallback: string) {
+  return model?.displayName || model?.modelId || fallback;
 }
 
 export default function ImagesPage() {
+  const { t } = useTranslation();
   const settings = useSettingsStore((state) => state.settings);
   const setSettings = useSettingsStore((state) => state.setSettings);
   const [prompt, setPrompt] = React.useState("");
@@ -141,15 +143,15 @@ export default function ImagesPage() {
 
   const generate = React.useCallback(async () => {
     if (!prompt.trim()) {
-      toast.error("请输入图片提示词");
+      toast.error(t("image_page.no_prompt"));
       return;
     }
     if (!settings?.imageGenerationModelId) {
-      toast.error("请先选择图像生成模型");
+      toast.error(t("image_page.no_model"));
       return;
     }
     if (editBlocked) {
-      toast.error("当前模型不支持参考图编辑，请选择 OpenAI 兼容图像模型或移除参考图");
+      toast.error(t("image_page.edit_blocked_msg"));
       return;
     }
     setGenerating(true);
@@ -161,13 +163,13 @@ export default function ImagesPage() {
         referenceFileIds: referenceImages.map((image) => image.id),
       }, { timeout: false });
       setImages((current) => [...response.images, ...current]);
-      toast.success(referenceImages.length ? "图片编辑完成" : "图片生成完成");
+      toast.success(referenceImages.length ? t("image_page.edit_done") : t("image_page.generate_done"));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "生成失败");
+      toast.error(error instanceof Error ? error.message : t("image_page.generate_failed"));
     } finally {
       setGenerating(false);
     }
-  }, [aspectRatio, editBlocked, numberOfImages, prompt, referenceImages, settings?.imageGenerationModelId]);
+  }, [aspectRatio, editBlocked, numberOfImages, prompt, referenceImages, settings?.imageGenerationModelId, t]);
 
   return (
     <div className="flex h-screen bg-background text-foreground">
@@ -175,47 +177,47 @@ export default function ImagesPage() {
       <aside className="hidden w-[340px] shrink-0 border-r bg-sidebar/80 px-4 pb-4 pt-9 md:block">
         <div className="flex items-center justify-between">
           <Button asChild size="icon-sm" variant="ghost">
-            <Link to="/" aria-label="返回聊天" title="返回聊天">
+            <Link to="/" aria-label={t("image_page.back_to_chat")} title={t("image_page.back_to_chat")}>
               <ArrowLeft className="size-4" />
             </Link>
           </Button>
           <Button asChild variant="outline" size="sm">
-            <Link to="/settings?section=models">模型设置</Link>
+            <Link to="/settings?section=models">{t("image_page.model_settings")}</Link>
           </Button>
         </div>
         <div className="mt-7 space-y-1">
           <div className="flex items-center gap-2 text-xl font-semibold">
             <WandSparkles className="size-5 text-primary" />
-            图像生成
+            {t("image_page.title")}
           </div>
-          <div className="text-sm text-muted-foreground">支持文本到图像生成、上传参考图编辑，并保留历史参考图便于复用。</div>
+          <div className="text-sm text-muted-foreground">{t("image_page.description")}</div>
         </div>
         <div className="mt-6 space-y-4">
           <div className="space-y-2">
-            <div className="text-sm font-medium">模型</div>
+            <div className="text-sm font-medium">{t("image_page.model")}</div>
             <Select value={settings?.imageGenerationModelId || ""} onValueChange={(value) => void selectModel(value)}>
               <SelectTrigger className="w-full">
-                <SelectValue placeholder="选择图像模型" />
+                <SelectValue placeholder={t("image_page.select_image_model")} />
               </SelectTrigger>
               <SelectContent>
                 {imageModels.map((model) => (
                   <SelectItem key={model.id} value={model.id}>
                     <span className="flex items-center gap-2">
                       <AIIcon name={model.providerName || model.displayName} className="size-4" />
-                      {model.providerName ? `${model.providerName} / ` : ""}{modelLabel(model)}
+                      {model.providerName ? `${model.providerName} / ` : ""}{modelLabel(model, t("image_page.not_selected"))}
                     </span>
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            {imageModels.length === 0 ? <div className="text-xs text-muted-foreground">请先在供应商中获取并勾选支持图像输出或 image_generation 工具的模型。</div> : null}
+            {imageModels.length === 0 ? <div className="text-xs text-muted-foreground">{t("image_page.model_empty_hint")}</div> : null}
             {selectedModel && !selectedModelCanEdit ? (
-              <div className="text-xs text-muted-foreground">当前模型可生成图片；参考图编辑仅支持 OpenAI 兼容图像模型。</div>
+              <div className="text-xs text-muted-foreground">{t("image_page.model_edit_only_hint")}</div>
             ) : null}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
-              <div className="text-sm font-medium">数量</div>
+              <div className="text-sm font-medium">{t("image_page.count")}</div>
               <Select value={numberOfImages} onValueChange={setNumberOfImages}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -224,11 +226,11 @@ export default function ImagesPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <div className="text-sm font-medium">比例</div>
+              <div className="text-sm font-medium">{t("image_page.ratio")}</div>
               <Select value={aspectRatio} onValueChange={setAspectRatio}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {ASPECT_RATIOS.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
+                  {ASPECT_RATIOS.map((item) => <SelectItem key={item.value} value={item.value}>{t(item.labelKey)}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -238,8 +240,8 @@ export default function ImagesPage() {
       <main className="flex min-w-0 flex-1 flex-col">
         <div className="border-b px-4 py-3 md:hidden">
           <div className="flex items-center justify-between">
-            <Link className="text-sm text-muted-foreground" to="/">返回聊天</Link>
-            <Link className="text-sm text-muted-foreground" to="/settings?section=models">模型设置</Link>
+            <Link className="text-sm text-muted-foreground" to="/">{t("image_page.back_to_chat")}</Link>
+            <Link className="text-sm text-muted-foreground" to="/settings?section=models">{t("image_page.model_settings")}</Link>
           </div>
         </div>
         <ScrollArea className="flex-1">
@@ -248,7 +250,7 @@ export default function ImagesPage() {
               <Textarea
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
-                placeholder="描述你想生成或编辑的图片"
+                placeholder={t("image_page.prompt_placeholder")}
                 className="min-h-28 resize-y border-0 bg-transparent p-0 text-base shadow-none focus-visible:ring-0"
               />
               {referenceImages.length > 0 ? (
@@ -260,7 +262,7 @@ export default function ImagesPage() {
                         type="button"
                         className="absolute top-1 right-1 rounded-full bg-background/90 p-1 opacity-0 shadow transition group-hover:opacity-100"
                         onClick={() => setReferenceImages((current) => current.filter((item) => item.id !== image.id))}
-                        aria-label="移除参考图"
+                        aria-label={t("image_page.remove_image")}
                       >
                         <X className="size-3.5" />
                       </button>
@@ -273,14 +275,14 @@ export default function ImagesPage() {
                   <input ref={inputRef} className="sr-only" type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void uploadReferenceImages(event.target.files)} />
                   <Button type="button" variant="outline" size="sm" onClick={() => inputRef.current?.click()} disabled={referenceImages.length >= 16 || generating || Boolean(selectedModel && !selectedModelCanEdit)}>
                     <ImagePlus className="size-4" />
-                    参考图
+                    {t("image_page.reference_image")}
                   </Button>
-                  {referenceImages.length > 0 ? <span className="text-xs text-muted-foreground">{referenceImages.length}/16，生成后保留</span> : null}
-                  {editBlocked ? <span className="text-xs text-destructive">当前模型不支持参考图编辑</span> : null}
+                  {referenceImages.length > 0 ? <span className="text-xs text-muted-foreground">{t("image_page.reference_kept", { count: referenceImages.length })}</span> : null}
+                  {editBlocked ? <span className="text-xs text-destructive">{t("image_page.reference_edit_blocked")}</span> : null}
                 </div>
                 <Button type="button" onClick={() => void generate()} disabled={generating || !settings?.imageGenerationModelId || editBlocked}>
                   {generating ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
-                  {referenceImages.length ? "编辑图片" : "生成图片"}
+                  {referenceImages.length ? t("image_page.edit") : t("image_page.generate")}
                 </Button>
               </div>
             </section>
@@ -295,7 +297,7 @@ export default function ImagesPage() {
                     <div className="line-clamp-2 text-sm">{image.prompt}</div>
                     <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
                       <span className="truncate">{image.model}</span>
-                      <span>{image.type === "image_edit" ? "编辑" : "生成"}</span>
+                      <span>{image.type === "image_edit" ? t("image_page.badge_edit") : t("image_page.badge_generate")}</span>
                     </div>
                     <div className="flex justify-end">
                       <Button
@@ -306,7 +308,7 @@ export default function ImagesPage() {
                           await api.delete(`images/${image.id}`);
                           setImages((current) => current.filter((item) => item.id !== image.id));
                         }}
-                        aria-label="删除"
+                        aria-label={t("image_page.delete")}
                       >
                         <Trash2 className="size-4" />
                       </Button>
@@ -316,7 +318,7 @@ export default function ImagesPage() {
               ))}
             </section>
             {images.length === 0 ? (
-              <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">暂无图片</div>
+              <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">{t("image_page.empty")}</div>
             ) : null}
           </div>
         </ScrollArea>

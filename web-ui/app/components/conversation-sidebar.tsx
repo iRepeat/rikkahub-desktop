@@ -747,11 +747,11 @@ export const ConversationSidebar = React.memo(({
 
   const handleBatchDelete = React.useCallback(async () => {
     if (!onDeleteMany || selectedConversationIds.length === 0) return;
-    if (!window.confirm(`删除选中的 ${selectedConversationIds.length} 个对话？`)) return;
+    if (!window.confirm(t("conversation_sidebar.batch_delete_confirm", { count: selectedConversationIds.length }))) return;
     setBatchDeleting(true);
     try {
       await onDeleteMany(selectedConversationIds);
-      toast.success(`已删除 ${selectedConversationIds.length} 个对话`);
+      toast.success(t("conversation_sidebar.batch_deleted", { count: selectedConversationIds.length }));
       leaveSelectionMode();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("conversation_sidebar.delete_failed"));
@@ -905,9 +905,9 @@ export const ConversationSidebar = React.memo(({
                   disabled={batchDeleting || selectedConversationIds.length === 0}
                 >
                   {batchDeleting ? <RefreshCw className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-                  删除 {selectedConversationIds.length || ""}
+                  {t("conversation_sidebar.delete_count", { n: selectedConversationIds.length || "" })}
                 </Button>
-                <Button variant="ghost" size="icon-sm" onClick={leaveSelectionMode} aria-label="退出多选" title="退出多选">
+                <Button variant="ghost" size="icon-sm" onClick={leaveSelectionMode} aria-label={t("conversation_sidebar.exit_multi_select")} title={t("conversation_sidebar.exit_multi_select")}>
                   <X className="size-4" />
                 </Button>
               </div>
@@ -920,7 +920,7 @@ export const ConversationSidebar = React.memo(({
                 disabled={!onDeleteMany || conversations.length === 0}
               >
                 <CheckSquare className="size-4" />
-                多选删除
+                {t("conversation_sidebar.multi_select_delete")}
               </Button>
             )}
           </div>
@@ -1157,8 +1157,8 @@ export const ConversationSidebar = React.memo(({
             size="icon-sm"
             className="text-foreground"
             type="button"
-            aria-label="图像生成"
-            title="图像生成"
+            aria-label={t("conversation_sidebar.image_generation")}
+            title={t("conversation_sidebar.image_generation")}
           >
             <Link to="/images">
               <Images className="size-4" />

@@ -60,12 +60,19 @@
 
 以下組織贊助了 Rikkahub 的持續開發，在此致謝。
 
-<a href="https://naapi.cc"><img src="icons/naapi.jpg" width="100" align="left" alt="钠API" /></a>
-
-**[钠API](https://naapi.cc)**\
-提供 ChatGPT、Claude、Gemini 等 100+ 全球頂級模型的統一介面，主打有競爭力的價格與出色的穩定性。
-
-<br clear="both" />
+<table>
+  <tr>
+    <td width="120" align="center">
+      <a href="https://naapi.cc">
+        <img src="icons/naapi.jpg" width="100" alt="钠API" />
+      </a>
+    </td>
+    <td>
+      <a href="https://naapi.cc"><b>钠API</b></a><br/>
+      提供 ChatGPT、Claude、Gemini 等 100+ 全球頂級模型的統一介面，主打有競爭力的價格與出色的穩定性。
+    </td>
+  </tr>
+</table>
 
 ## 🏗️ 從原始碼建置
 

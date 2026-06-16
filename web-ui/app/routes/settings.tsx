@@ -985,6 +985,7 @@ function ProvidersSection({
   settings: Settings;
   onSettings: (settings: Settings) => void;
 }) {
+  const { t } = useTranslation();
   // URL ?providerId= deep-link is only honored on first mount, so subsequent settings updates
   // (autosave, SSE) don't snap the selection back to the URL value or the default first provider.
   const initialProviderId = React.useMemo(() => {
@@ -1110,7 +1111,7 @@ function ProvidersSection({
             ),
           });
         })
-        .catch((error: Error) => toast.error(error.message || "自动保存供应商失败"));
+        .catch((error: Error) => toast.error(error.message || t("settings:providers.autosave_failed")));
     }, 700);
     return () => window.clearTimeout(timer);
   }, [draft, onSettings, settings]);
@@ -1127,7 +1128,7 @@ function ProvidersSection({
       mergedTestModels.find((item) => item.modelId === requestedModelId) ??
       null;
     if (selectedTestModel && (selectedTestModel.type as string) === "IMAGE") {
-      setTestResult("正在保存配置...\n正在执行图像生成测试...");
+      setTestResult(t("settings:providers.test_img_starting"));
       try {
         await save();
         const started = Date.now();
@@ -1148,12 +1149,16 @@ function ProvidersSection({
           prompt: "A red apple on a white background",
         });
         setTestResult(
-          `图像生成测试完成\n\n模型: ${requestedModelId}\n用时: ${(durationMs / 1000).toFixed(2)}s\n输出文件: ${response.image?.fileName ?? "-"}`,
+          t("settings:providers.test_img_done", {
+            model: requestedModelId,
+            duration: (durationMs / 1000).toFixed(2),
+            file: response.image?.fileName ?? "-",
+          }),
         );
         onSettings(await api.get<Settings>("settings"));
-        toast.success("图像生成测试成功");
+        toast.success(t("settings:providers.test_img_ok"));
       } catch (error) {
-        const message = error instanceof Error ? error.message : "图像生成测试失败";
+        const message = error instanceof Error ? error.message : t("settings:providers.test_img_failed");
         setTestResult(message);
         toast.error(message);
       } finally {
@@ -1161,7 +1166,7 @@ function ProvidersSection({
       }
       return;
     }
-    setTestResult("正在保存配置...\n正在读取模型列表并准备测试...");
+    setTestResult(t("settings:providers.test_starting"));
     try {
       await save();
       const response = await fetch(appendWebAuthQuery("/api/settings/provider/test/stream"), {
@@ -1189,10 +1194,17 @@ function ProvidersSection({
         setTestChecks(fallback.checks ?? []);
         setTestModelId(fallback.testModelId);
         setTestResult(
-          `测试完成\n\n测试模型: ${fallback.testModelId}\n模型列表端点: ${fallback.endpoint}\n当前聊天端点: ${fallback.responseApiEndpoint}\n模型数量: ${fallback.modelCount}\n\n${checks}\n\n模型列表预览:\n${fallback.preview}`,
+          t("settings:providers.test_done_fallback", {
+            model: fallback.testModelId,
+            endpoint: fallback.endpoint,
+            chatEndpoint: fallback.responseApiEndpoint,
+            count: fallback.modelCount,
+            checks,
+            preview: fallback.preview,
+          }),
         );
         onSettings(await api.get<Settings>("settings"));
-        toast.success("连接测试完成");
+        toast.success(t("settings:providers.test_done_ok"));
         return;
       }
       const checks: ProviderTestCheck[] = [];
@@ -1201,15 +1213,22 @@ function ProvidersSection({
         setTestInfo(info);
         setTestChecks([...checks]);
         const header = info
-          ? `测试模型: ${info.testModelId || effectiveTestModelId}\n模型列表端点: ${info.endpoint}\n当前聊天端点: ${info.responseApiEndpoint}\n模型数量: ${info.modelCount}`
-          : `测试模型: ${effectiveTestModelId || "正在自动选择..."}`;
+          ? t("settings:providers.test_header", {
+              model: info.testModelId || effectiveTestModelId,
+              endpoint: info.endpoint,
+              chatEndpoint: info.responseApiEndpoint,
+              count: info.modelCount,
+            })
+          : t("settings:providers.test_header_pending", {
+              model: effectiveTestModelId || t("settings:providers.auto_selecting"),
+            });
         const checkText = checks
           .map(
             (item) =>
               `${item.ok ? "✓" : "×"} ${item.mode}: ${item.status || "failed"}\n${item.preview}`,
           )
           .join("\n\n");
-        const preview = info?.preview ? `\n\n模型列表预览:\n${info.preview}` : "";
+        const preview = info?.preview ? t("settings:providers.test_preview", { preview: info.preview }) : "";
         setTestResult([prefix, header, checkText, preview].filter(Boolean).join("\n\n"));
       };
       const reader = response.body.getReader();
@@ -1236,28 +1255,28 @@ function ProvidersSection({
           if (!dataText) continue;
           const data = JSON.parse(dataText) as Record<string, unknown>;
           if (event === "progress") {
-            renderResult(String(data.message ?? "正在测试..."));
+            renderResult(String(data.message ?? t("settings:providers.testing")));
           } else if (event === "models") {
             info = data as unknown as ProviderTestInfo;
             if (info.testModelId) setTestModelId(info.testModelId);
-            renderResult("模型列表读取完成，开始逐项测试...");
+            renderResult(t("settings:providers.models_read"));
           } else if (event === "check") {
             checks.push(data as unknown as ProviderTestCheck);
-            renderResult("测试进行中...");
+            renderResult(t("settings:providers.test_in_progress"));
           } else if (event === "done") {
             info = data as unknown as ProviderTestInfo;
             if (Array.isArray(info.checks)) checks.splice(0, checks.length, ...info.checks);
             if (info.testModelId) setTestModelId(info.testModelId);
-            renderResult("测试完成");
+            renderResult(t("settings:providers.test_complete"));
           } else if (event === "error") {
-            throw new Error(String(data.error ?? "测试失败"));
+            throw new Error(String(data.error ?? t("settings:providers.test_error")));
           }
         }
       }
       onSettings(await api.get<Settings>("settings"));
-      toast.success("连接测试成功");
+      toast.success(t("settings:providers.test_success"));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "测试失败";
+      const message = error instanceof Error ? error.message : t("settings:providers.test_failed");
       setTestInfo(null);
       setTestChecks([]);
       setTestResult(message);
@@ -1268,7 +1287,7 @@ function ProvidersSection({
   };
   const fetchModels = async () => {
     if (!textValue(draft.apiKey).trim()) {
-      toast.error("请先填写 API Key 再获取模型列表");
+      toast.error(t("settings:providers.key_required_fetch"));
       return;
     }
     setFetchingModels(true);
@@ -1280,9 +1299,9 @@ function ProvidersSection({
       );
       setFetchedModels(result.models);
       setTestModelId(result.models.find((model) => model.modelId !== "auto")?.modelId ?? "");
-      toast.success(`获取到 ${result.models.length} 个模型`);
+      toast.success(t("settings:providers.fetched_models", { count: result.models.length }));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "获取模型失败");
+      toast.error(error instanceof Error ? error.message : t("settings:providers.fetch_failed"));
     } finally {
       setFetchingModels(false);
     }
@@ -1300,7 +1319,7 @@ function ProvidersSection({
     }
     // 空列表：先持久化当前配置（让服务端拿到最新 baseUrl / apiKey），再拉取上游模型
     if (!textValue(draft.apiKey).trim()) {
-      toast.error("请先填写 API Key 再启用并获取模型列表");
+      toast.error(t("settings:providers.key_required_enable"));
       return;
     }
     setFetchingModels(true);
@@ -1311,24 +1330,24 @@ function ProvidersSection({
         { providerId: draft.id },
       );
       if (!result.models.length) {
-        toast.error("未获取到任何模型，无法启用，请检查供应商配置");
+        toast.error(t("settings:providers.no_models_enable"));
         return;
       }
       // 与单个勾选时一致地分类 CHAT / IMAGE / EMBEDDING
       const models = result.models.map(applyAutoModelType);
       setFetchedModels(result.models);
       patchDraft({ enabled: true, models });
-      toast.success(`已获取 ${models.length} 个模型并启用`);
+      toast.success(t("settings:providers.enabled_models", { count: models.length }));
     } catch (error) {
       // 不 patch enabled —— 保持关闭
-      toast.error(error instanceof Error ? error.message : "获取模型失败，未能启用");
+      toast.error(error instanceof Error ? error.message : t("settings:providers.enable_fetch_failed"));
     } finally {
       setFetchingModels(false);
     }
   };
   const checkBalance = async () => {
     setCheckingBalance(true);
-    setBalanceResult("正在查询余额...");
+    setBalanceResult(t("settings:providers.balance_querying"));
     try {
       await save();
       const result = await api.post<{ value: string; endpoint: string; preview: string }>(
@@ -1336,10 +1355,10 @@ function ProvidersSection({
         { providerId: draft.id },
         { timeout: false },
       );
-      setBalanceResult(`余额：${result.value}\n端点：${result.endpoint}\n\n${result.preview}`);
-      toast.success(`余额：${result.value}`);
+      setBalanceResult(t("settings:providers.balance_done", { value: result.value, endpoint: result.endpoint, preview: result.preview }));
+      toast.success(t("settings:providers.balance_ok", { value: result.value }));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "余额查询失败";
+      const message = error instanceof Error ? error.message : t("settings:providers.balance_failed");
       setBalanceResult(message);
       toast.error(message);
     } finally {
@@ -1431,7 +1450,7 @@ function ProvidersSection({
       // downstream (toggleModel matches by modelId, not id, so a clash would orphan the new one).
       const clash = (draft.models ?? []).some((item) => item.modelId === model.modelId);
       if (clash) {
-        toast.error(`已存在 modelId 为「${model.modelId}」的模型，请换一个 ID`);
+        toast.error(t("settings:providers.model_id_exists", { id: model.modelId }));
         return;
       }
       models = [...(draft.models ?? []), model];
@@ -1442,7 +1461,7 @@ function ProvidersSection({
       models = [...without, model];
     }
     patchDraft({ models });
-    toast.success(modelDialog.mode === "add" ? "模型已添加" : "模型已保存");
+    toast.success(modelDialog.mode === "add" ? t("settings:providers.model_added") : t("settings:providers.model_saved"));
   };
 
   const handleModelDialogDelete = () => {
@@ -1455,14 +1474,14 @@ function ProvidersSection({
         (item) => item.id !== target.id && item.modelId !== target.modelId,
       ),
     });
-    toast.success("模型已删除");
+    toast.success(t("settings:providers.model_deleted"));
   };
   const addProvider = async () => {
     const next = createProvider();
     await api.post("settings/provider", next);
     onSettings({ ...settings, providers: [...settings.providers, next] });
     setSelectedId(next.id);
-    toast.success("供应商已添加");
+    toast.success(t("settings:providers.added"));
   };
   const moveProvider = async (from: number, to: number) => {
     const nextProviders = moveItem(settings.providers, from, to);
@@ -1472,23 +1491,23 @@ function ProvidersSection({
     });
   };
   const testModeLabels: Record<ProviderTestMode, string> = {
-    non_stream: "非流式",
-    stream: "流式",
-    tools: "工具调用",
+    non_stream: t("settings:providers.mode_non_stream"),
+    stream: t("settings:providers.mode_stream"),
+    tools: t("settings:providers.mode_tools"),
   };
 
   return (
     <>
       <SectionHeader
         icon={KeyRound}
-        title="供应商"
-        subtitle="内置模板、启用状态、Base URL、API 路径、Response API、余额路径和模型配置。"
+        title={t("settings:providers.title")}
+        subtitle={t("settings:providers.subtitle")}
       />
       <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
         <div className="rounded-lg border bg-card p-2">
           <Button className="mb-2 w-full justify-start" variant="outline" onClick={addProvider}>
             <Plus className="size-4" />
-            添加供应商
+            {t("settings:providers.add")}
           </Button>
           {settings.providers.map((provider, index) => (
             <SortableRow
@@ -1519,7 +1538,7 @@ function ProvidersSection({
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">启用</span>
+              <span className="text-sm text-muted-foreground">{t("settings:providers.enabled_label")}</span>
               <Switch
                 checked={draft.enabled}
                 disabled={fetchingModels}
@@ -1529,14 +1548,14 @@ function ProvidersSection({
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <label className="space-y-2">
-              <span className="text-sm font-medium">名称</span>
+              <span className="text-sm font-medium">{t("settings:providers.name")}</span>
               <Input
                 value={draft.name}
                 onChange={(event) => patchDraft({ name: event.target.value })}
               />
             </label>
             <label className="space-y-2">
-              <span className="text-sm font-medium">类型</span>
+              <span className="text-sm font-medium">{t("settings:providers.type")}</span>
               <Select
                 value={kind}
                 onValueChange={(value) =>
@@ -1561,10 +1580,10 @@ function ProvidersSection({
                     type="button"
                     onClick={() => void openExternal(providerGetKeyUrl(textValue(draft.baseUrl))!)}
                     className="ml-auto inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                    title="前往官网获取 API Key"
+                    title={t("settings:providers.get_key_title")}
                   >
                     <ExternalLink className="size-3" />
-                    获取 API Key
+                    {t("settings:providers.get_key")}
                   </button>
                 ) : null}
               </div>
@@ -1583,10 +1602,10 @@ function ProvidersSection({
                 }
               />
               <span className="block break-all text-xs text-muted-foreground">
-                聊天完整 URL：{endpointPreview(draft)}
+                {t("settings:providers.chat_url", { url: endpointPreview(draft) })}
               </span>
               <span className="block break-all text-xs text-muted-foreground">
-                模型列表 URL：{modelListEndpointPreview(draft)}
+                {t("settings:providers.models_url", { url: modelListEndpointPreview(draft) })}
               </span>
             </label>
             <div className="space-y-2 rounded-md border px-3 py-2">
@@ -1604,7 +1623,7 @@ function ProvidersSection({
               <div>
                 <div className="text-sm font-medium">Response API</div>
                 <div className="text-xs text-muted-foreground">
-                  开启后聊天端点自动切换为 /responses
+                  {t("settings:providers.response_api_desc")}
                 </div>
               </div>
               <Switch
@@ -1621,11 +1640,9 @@ function ProvidersSection({
             {kind === "openai" ? (
               <div className="flex items-start justify-between gap-3 rounded-md border px-3 py-3 md:col-span-2">
                 <div className="min-w-0 flex-1 space-y-1">
-                  <div className="text-sm font-medium">回传历史思考过程</div>
+                  <div className="text-sm font-medium">{t("settings:providers.history_reasoning_title")}</div>
                   <div className="text-xs leading-relaxed text-muted-foreground">
-                    新一代模型（例如 DeepSeek V4）要求回传 reasoning_content。开启后，历史 assistant
-                    消息的 reasoning_content
-                    字段将会随请求回传，不要求回传的模型会静默忽略该字段。若部分供应商不识别该字段而拒绝请求时，可手动关闭。
+                    {t("settings:providers.history_reasoning_desc")}
                   </div>
                 </div>
                 <Switch
@@ -1641,10 +1658,9 @@ function ProvidersSection({
               <div className="grid gap-3 rounded-md border px-3 py-3 md:col-span-2 md:grid-cols-[1fr_180px]">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <div className="text-sm font-medium">Claude 提示缓存</div>
+                    <div className="text-sm font-medium">{t("settings:providers.prompt_cache_title")}</div>
                     <div className="text-xs text-muted-foreground">
-                      开启后会给系统提示词和倒数第二条用户消息添加 cache_control，复用 Anthropic
-                      的提示缓存。
+                      {t("settings:providers.prompt_cache_desc")}
                     </div>
                   </div>
                   <Switch
@@ -1653,7 +1669,7 @@ function ProvidersSection({
                   />
                 </div>
                 <label className="space-y-2">
-                  <span className="text-sm font-medium">缓存时长</span>
+                  <span className="text-sm font-medium">{t("settings:providers.cache_ttl")}</span>
                   <Select
                     value={textValue(draft.promptCacheTtl) || "5m"}
                     onValueChange={(promptCacheTtl) =>
@@ -1665,8 +1681,8 @@ function ProvidersSection({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="5m">5 分钟</SelectItem>
-                      <SelectItem value="1h">1 小时</SelectItem>
+                      <SelectItem value="5m">{t("settings:providers.cache_5m")}</SelectItem>
+                      <SelectItem value="1h">{t("settings:providers.cache_1h")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </label>
@@ -1676,19 +1692,19 @@ function ProvidersSection({
           <div className="space-y-3 rounded-md border p-3">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-medium">模型列表</div>
+                <div className="text-sm font-medium">{t("settings:providers.models_title")}</div>
                 <div className="text-xs text-muted-foreground">
-                  先获取供应商模型，再勾选要启用的模型。当前已启用 {draft.models?.length ?? 0} 个。
+                  {t("settings:providers.models_desc", { count: draft.models?.length ?? 0 })}
                 </div>
               </div>
               <div className="flex gap-2">
                 <Button
                   variant="outline"
                   onClick={openAddModelDialog}
-                  title="手动添加模型（用于上游列表里没有的自定义模型）"
+                  title={t("settings:providers.add_model_title")}
                 >
                   <Plus className="size-4" />
-                  添加模型
+                  {t("settings:providers.add_model")}
                 </Button>
                 <Button variant="outline" onClick={fetchModels} disabled={fetchingModels}>
                   {fetchingModels ? (
@@ -1696,7 +1712,7 @@ function ProvidersSection({
                   ) : (
                     <RefreshCw className="size-4" />
                   )}
-                  获取模型列表
+                  {t("settings:providers.fetch_models")}
                 </Button>
               </div>
             </div>
@@ -1778,9 +1794,9 @@ function ProvidersSection({
                               ? "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300"
                               : "border-border text-muted-foreground hover:bg-muted",
                           )}
-                          title={hasTool ? "工具调用已启用，点击关闭" : "点击启用工具调用能力"}
+                          title={hasTool ? t("settings:providers.tool_enabled") : t("settings:providers.tool_disabled")}
                         >
-                          工具
+                          {t("settings:providers.tool_short")}
                         </button>
                         <button
                           type="button"
@@ -1795,9 +1811,9 @@ function ProvidersSection({
                               ? "border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300"
                               : "border-border text-muted-foreground hover:bg-muted",
                           )}
-                          title={hasReasoning ? "推理已启用，点击关闭" : "点击启用推理能力"}
+                          title={hasReasoning ? t("settings:providers.reasoning_enabled") : t("settings:providers.reasoning_disabled")}
                         >
-                          推理
+                          {t("settings:providers.reasoning_short")}
                         </button>
                       </div>
                     ) : null}
@@ -1806,14 +1822,14 @@ function ProvidersSection({
               })}
               {!fetchedModels.length && !(draft.models ?? []).length ? (
                 <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-                  还没有模型。点击「添加模型」手动添加，或点击「获取模型列表」从上游同步。
+                  {t("settings:providers.no_models")}
                 </div>
               ) : null}
             </div>
           </div>
           <div className="space-y-2 rounded-md border px-3 py-2">
             <div className="flex items-center justify-between gap-3">
-              <span className="text-xs font-medium text-muted-foreground">测试模型</span>
+              <span className="text-xs font-medium text-muted-foreground">{t("settings:providers.test_model")}</span>
               <div className="flex items-center gap-2">
                 <Button variant="outline" onClick={test} disabled={testing}>
                   {testing ? (
@@ -1821,29 +1837,29 @@ function ProvidersSection({
                   ) : (
                     <Database className="size-4" />
                   )}
-                  测试
+                  {t("settings:providers.test")}
                 </Button>
                 <Button
                   variant="outline"
                   onClick={async () => {
-                    if (!window.confirm(`删除供应商「${draft.name}」？`)) return;
+                    if (!window.confirm(t("settings:providers.delete_confirm", { name: draft.name }))) return;
                     await api.delete(`settings/provider/${encodeURIComponent(draft.id)}`);
                     const providers = settings.providers.filter((item) => item.id !== draft.id);
                     onSettings({ ...settings, providers });
                     setSelectedId(providers[0]?.id ?? "");
-                    toast.success("供应商已删除");
+                    toast.success(t("settings:providers.deleted"));
                   }}
                   disabled={settings.providers.length <= 1}
                 >
                   <Trash2 className="size-4" />
-                  删除
+                  {t("settings:providers.delete")}
                 </Button>
-                <span className="px-2 text-xs text-muted-foreground">已自动保存</span>
+                <span className="px-2 text-xs text-muted-foreground">{t("settings:providers.autosaved")}</span>
               </div>
             </div>
             <Select value={effectiveTestModelId} onValueChange={setTestModelId}>
               <SelectTrigger className="w-full">
-                <SelectValue placeholder="先获取模型列表或选择已启用模型" />
+                <SelectValue placeholder={t("settings:providers.test_model_ph")} />
               </SelectTrigger>
               <SelectContent>
                 {mergedTestModels.map((model) => (
@@ -1857,9 +1873,9 @@ function ProvidersSection({
           <div className="space-y-3 rounded-md border p-3">
             <div className="flex items-end justify-between gap-3">
               <div>
-                <div className="text-sm font-medium">余额查询</div>
+                <div className="text-sm font-medium">{t("settings:providers.balance_title")}</div>
                 <div className="text-xs text-muted-foreground">
-                  按下方接口路径 GET 余额，并按指定 JSON 字段读取数值。
+                  {t("settings:providers.balance_desc")}
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -1881,13 +1897,13 @@ function ProvidersSection({
                   ) : (
                     <Database className="size-4" />
                   )}
-                  查询
+                  {t("settings:providers.query")}
                 </Button>
               </div>
             </div>
             <div className="grid gap-3 md:grid-cols-2">
               <label className="space-y-2">
-                <span className="text-sm font-medium">余额 API Path</span>
+                <span className="text-sm font-medium">{t("settings:providers.balance_api_path")}</span>
                 <Input
                   value={textValue(balanceOption.apiPath) || "/credits"}
                   onChange={(event) =>
@@ -1898,7 +1914,7 @@ function ProvidersSection({
                 />
               </label>
               <label className="space-y-2">
-                <span className="text-sm font-medium">余额结果路径</span>
+                <span className="text-sm font-medium">{t("settings:providers.balance_result_path")}</span>
                 <Input
                   value={textValue(balanceOption.resultPath)}
                   onChange={(event) =>
@@ -1915,13 +1931,13 @@ function ProvidersSection({
           !imageTestResult ? (
             <div className="rounded-md border bg-muted/40 p-3">
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <div className="text-sm font-medium">测试摘要</div>
+                <div className="text-sm font-medium">{t("settings:providers.test_summary")}</div>
                 <div className="text-xs text-muted-foreground">
                   {testInfo?.testModelId
-                    ? `模型：${testInfo.testModelId}`
+                    ? t("settings:providers.test_summary_model", { model: testInfo.testModelId })
                     : testing
-                      ? "正在测试..."
-                      : "等待结果"}
+                      ? t("settings:providers.testing")
+                      : t("settings:providers.awaiting")}
                 </div>
               </div>
               <div className="grid gap-2 md:grid-cols-3">
@@ -1952,11 +1968,11 @@ function ProvidersSection({
                       <div className="mt-1 text-xs text-muted-foreground">
                         {check
                           ? check.ok
-                            ? `成功 · HTTP ${check.status}`
-                            : `失败 · ${check.status || "未连接"}`
+                            ? t("settings:providers.check_ok", { status: check.status })
+                            : t("settings:providers.check_failed", { status: check.status || t("settings:providers.not_connected") })
                           : pending
-                            ? "进行中"
-                            : "未测试"}
+                            ? t("settings:providers.in_progress")
+                            : t("settings:providers.not_tested")}
                       </div>
                     </div>
                   );
@@ -1967,31 +1983,30 @@ function ProvidersSection({
           {isImageTestMode && testing && !imageTestResult ? (
             <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
               <Loader2 className="mr-2 inline size-4 animate-spin align-middle" />
-              正在用 <span className="font-medium text-foreground">
+              {t("settings:providers.img_test_generating_pre")}<span className="font-medium text-foreground">
                 {effectiveTestModelId}
               </span>{" "}
-              生成测试图像…
+              {t("settings:providers.img_test_generating_post")}
             </div>
           ) : null}
           {imageTestResult ? (
             <div className="rounded-md border bg-muted/40 p-3">
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <div className="text-sm font-medium">图像生成测试结果</div>
+                <div className="text-sm font-medium">{t("settings:providers.img_test_result")}</div>
                 <div className="text-xs text-muted-foreground">
-                  模型：{imageTestResult.modelId} · 用时{" "}
-                  {(imageTestResult.durationMs / 1000).toFixed(2)}s
+                  {t("settings:providers.img_test_model", { model: imageTestResult.modelId, duration: (imageTestResult.durationMs / 1000).toFixed(2) })}
                 </div>
               </div>
               <div className="flex flex-wrap items-start gap-3">
                 {imageTestResult.url ? (
                   <img
                     src={appendWebAuthQuery(imageTestResult.url)}
-                    alt="生成结果"
+                    alt={t("settings:providers.img_alt")}
                     className="h-40 w-40 rounded-md border object-cover"
                   />
                 ) : null}
                 <div className="min-w-0 flex-1 text-xs text-muted-foreground">
-                  <div className="mb-1 font-medium text-foreground">提示词</div>
+                  <div className="mb-1 font-medium text-foreground">{t("settings:providers.prompt_label")}</div>
                   <div className="whitespace-pre-wrap">{imageTestResult.prompt}</div>
                 </div>
               </div>

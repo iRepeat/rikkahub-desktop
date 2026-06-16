@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 
 export type ThemeMode = "dark" | "light" | "system";
 export type Theme = ThemeMode;
@@ -196,6 +196,18 @@ export function ThemeProvider({
   const [colorTheme, setColorThemeState] = useState<ColorTheme>(() =>
     resolveInitialColorTheme(storageKey, userThemes),
   );
+  const [modeTransitioning, setModeTransitioning] = useState(false);
+  const [colorTransitioning, setColorTransitioning] = useState(false);
+
+  const scheduleModeTransition = useCallback(() => {
+    setModeTransitioning(true);
+    window.setTimeout(() => setModeTransitioning(false), 350);
+  }, []);
+
+  const scheduleColorTransition = useCallback(() => {
+    setColorTransitioning(true);
+    window.setTimeout(() => setColorTransitioning(false), 350);
+  }, []);
 
   useEffect(() => {
     const root = window.document.documentElement;
@@ -213,6 +225,7 @@ export function ThemeProvider({
     };
 
     applyMode(theme);
+    scheduleModeTransition();
 
     if (theme !== "system") {
       return;
@@ -220,6 +233,7 @@ export function ThemeProvider({
 
     const onSystemThemeChange = () => {
       applyMode("system");
+      scheduleModeTransition();
     };
 
     mediaQuery.addEventListener("change", onSystemThemeChange);
@@ -227,12 +241,22 @@ export function ThemeProvider({
     return () => {
       mediaQuery.removeEventListener("change", onSystemThemeChange);
     };
-  }, [theme]);
+  }, [theme, scheduleModeTransition]);
 
   useEffect(() => {
     const root = window.document.documentElement;
     root.dataset.theme = colorTheme;
-  }, [colorTheme]);
+    scheduleColorTransition();
+  }, [colorTheme, scheduleColorTransition]);
+
+  useEffect(() => {
+    const root = window.document.documentElement;
+    if (modeTransitioning || colorTransitioning) {
+      root.classList.add("theme-transition");
+    } else {
+      root.classList.remove("theme-transition");
+    }
+  }, [modeTransitioning, colorTransitioning]);
 
   // 把所有用户主题的 CSS 同时注入到同一个 <style>:每条按自己的 data-theme 作用域隔离,
   // 只有当前 colorTheme 匹配的那条才真正生效,切换主题零延迟、无需重新注入。

@@ -1380,6 +1380,17 @@
   pointer-events: none;
 }
 
+/* Smooth theme transitions: applied temporarily by ThemeProvider on mode/colorTheme change. */
+html.theme-transition,
+html.theme-transition * {
+  transition:
+    background-color 0.3s ease,
+    color 0.3s ease,
+    border-color 0.3s ease,
+    fill 0.3s ease,
+    stroke 0.3s ease !important;
+}
+
 /* 沉浸式标题栏:TitleBar 是浮在窗口顶部的透明拖拽层(z-50, 高 36px),不再往下推
    内容——侧边栏和正文都顶到窗口最顶端(y=0),让各自的背景色从底到顶连续不断。
    代价:标题栏那 36px 会盖住侧边栏顶部和正文顶部的一截。所以给两者的顶部内边距

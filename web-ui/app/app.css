@@ -21,7 +21,7 @@
   --accent-foreground: oklch(0.24 0.01 240);
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(1 0 0);
-  --border: oklch(0.94 0.004 240 / 0.5);
+  --border: oklch(0.9 0.004 240 / 0.62);
   --input: oklch(0.94 0.004 240);
   --ring: oklch(0.708 0 0);
   /* 板块分界线专用:比 --border 更淡,用于侧边栏边界、正文顶栏下沿等"区域分隔",
@@ -1408,3 +1408,24 @@ html.theme-transition * {
 }
 /* shadcn `Sidebar` 挂成 fixed inset-y-0,默认顶到 viewport 边——正是我们要的(顶到窗口顶)。
    不再像之前那样把它往下 snap 36px。 */
+
+/* MX Brutalist 主题下 sidebar footer 背景是深绿色,但底部入口按钮和文字仍引用
+   主内容区的 muted-foreground/foreground(深棕/近黑),导致完全看不清。
+   在 footer 作用域内把相关变量映射到 sidebar 自己的浅色前景系统,既保留主内容区
+   的原始配色,又让底部控件可读、与 sidebar 协调。 */
+[data-theme="mx-brutalist"] [data-slot="sidebar-footer"] {
+  --muted-foreground: var(--sidebar-foreground);
+  --foreground: var(--sidebar-foreground);
+  --background: var(--sidebar);
+  --input: var(--sidebar-accent);
+  --accent: var(--sidebar-accent);
+  --accent-foreground: var(--sidebar-accent-foreground);
+  --border: var(--sidebar-border);
+}
+
+/* 同一主题下 outline 按钮的投影也是用 --sidebar-border 画的,上面已经映射。
+   额外把 ghost 图标按钮 hover 背景压深一点,避免在深绿上太扎眼。 */
+[data-theme="mx-brutalist"] [data-slot="sidebar-footer"] button[variant="ghost"]:hover {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+}

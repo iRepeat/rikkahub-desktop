@@ -7410,9 +7410,33 @@ function claudeMessagesFromApiMessages(messages: ApiMessage[], providerItem: Pro
       }
       return [{ role: "user", content: claudeContentBlocks(item.content) }];
     });
-  if (providerItem.promptCaching !== true) return items;
 
-  const realUserIndices = items
+  // 合并连续的 tool_result user message（对齐安卓 ClaudeProvider.addAssistantMessage +
+  // groupPartsByToolBoundary，见 ClaudeProviderMessageTest "parallel tool calls should be in
+  // same assistant message"）。OpenAI 格式把一轮 assistant 并行的多个 tool_use 结果拆成多条
+  // 独立的 role:"tool" 消息，逐条映射会产生连续的 role:"user" message，违反 Anthropic 的
+  // user/assistant 严格交替规则 → 400 "text content blocks must be non-empty"。这里把同一轮的
+  // 所有 tool_result 合并进一个 user message 的 content 数组；只合并前后都是纯 tool_result 的
+  // 相邻项，不触碰普通文本 user message 与 assistant message。
+  const isToolResultUser = (entry: (typeof items)[number]) =>
+    entry.role === "user" &&
+    Array.isArray(entry.content) &&
+    entry.content.length > 0 &&
+    entry.content.every((block) => isRecord(block) && block.type === "tool_result");
+  const mergedItems: typeof items = [];
+  for (const item of items) {
+    const prevIdx = mergedItems.length - 1;
+    const prev = prevIdx >= 0 ? mergedItems[prevIdx] : undefined;
+    if (isToolResultUser(item) && prev !== undefined && isToolResultUser(prev)) {
+      prev.content = [...prev.content, ...item.content];
+    } else {
+      mergedItems.push(item);
+    }
+  }
+
+  if (providerItem.promptCaching !== true) return mergedItems;
+
+  const realUserIndices = mergedItems
     .map((item, index) => {
       const content = Array.isArray(item.content) ? item.content : [];
       const hasOnlyToolResults = content.length > 0 && content.every((block) => isRecord(block) && block.type === "tool_result");
@@ -7420,8 +7444,8 @@ function claudeMessagesFromApiMessages(messages: ApiMessage[], providerItem: Pro
     })
     .filter((index) => index >= 0);
   const targetIndex = realUserIndices.length >= 2 ? realUserIndices[realUserIndices.length - 2] : -1;
-  if (targetIndex < 0) return items;
-  return items.map((item, index) =>
+  if (targetIndex < 0) return mergedItems;
+  return mergedItems.map((item, index) =>
     index === targetIndex
       ? { ...item, content: withClaudeCacheOnLastBlock(item.content, providerItem) }
       : item,

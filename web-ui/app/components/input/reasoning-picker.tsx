@@ -249,10 +249,11 @@ export function ReasoningPickerButtonImpl({ disabled = false, className }: Reaso
               }}
             />
 
-            {/* Tick labels — 标签中心对齐 Slider 圆头(Radix thumb 在 i/(n-1) 处)。
-                之前用 flex-1 text-center,6 等分中心 ((i+0.5)/6) 与圆头节点 (i/5) 错位,
-                中间档位的圆头明显偏离文字。改为绝对定位:中间档位 translateX(-50%) 让中心
-                精确落在圆头上,首尾档位用边缘对齐保持"在开头/结尾"的视觉。 */}
+            {/* Tick labels — 标签中心精确对齐 Radix 滑块圆头。
+                Radix thumb 不在 i/(n-1)*100%(那样端点会溢出轨道),而是做"边界内偏移"
+                (getThumbInBoundsOffset):thumb 中心 = i/(n-1) * (容器宽 - thumb直径) + thumb半径。
+                thumb 为 size-4(16px),故 6 个停靠点均匀落在 [8px, 100%-8px]。标签用同一 calc
+                公式定位,所有档位统一 -translate-x-1/2 中心对齐,圆头严格落在每个文字中心。 */}
             <div className="relative h-3.5">
               {reasoningPresets.map((preset, i) => {
                 const last = reasoningPresets.length - 1;
@@ -260,14 +261,10 @@ export function ReasoningPickerButtonImpl({ disabled = false, className }: Reaso
                   <span
                     key={preset.key}
                     className={cn(
-                      "absolute top-0 text-[10px] leading-none whitespace-nowrap transition-colors",
+                      "absolute top-0 -translate-x-1/2 text-[10px] leading-none whitespace-nowrap transition-colors",
                       i === localIndex ? "text-primary font-medium" : "text-muted-foreground",
                     )}
-                    style={{
-                      left: `${(i / last) * 100}%`,
-                      transform:
-                        i === 0 ? "translateX(0)" : i === last ? "translateX(-100%)" : "translateX(-50%)",
-                    }}
+                    style={{ left: `calc((100% - 16px) * ${i / last} + 8px)` }}
                   >
                     {preset.label}
                   </span>

@@ -6198,8 +6198,26 @@ async function executeToolCall(toolCall: any, assistant: Assistant) {
     throw new Error(`Invalid tool arguments JSON for ${name}: ${err instanceof Error ? err.message : String(err)}`);
   }
   if (name === "memory_tool") return runMemoryTool(assistant, args);
-  if (name === "search_web") return runSearchWeb(args);
-  if (name === "scrape_web") return runScrapeWeb(args);
+  // 联网搜索是可关闭的工具(全局 enableWebSearch 开关)。关闭后,tools 数组里不再声明
+  // search_web,但历史消息里残留的 search tool_call 仍会诱导模型再次调用——而本函数原本
+  // 无条件执行真搜索,造成"关了搜索 AI 照样搜"的 bug。加守卫与 use_skill(6266) /
+  // callMcpTool(5912) 的"本轮未启用则拒绝执行"语义对齐(安卓等价:未注册到本轮 tools 表
+  // 的工具根本查不到 execute)。throw 经调用方 catch 转成 tool_result 回灌,模型看到
+  // "已禁用"即停止。
+  if (name === "search_web") {
+    if (!state.settings.enableWebSearch) {
+      throw new Error(
+        "Web search is currently disabled. Stop calling search_web and answer from your own knowledge, or ask the user to re-enable web search.",
+      );
+    }
+    return runSearchWeb(args);
+  }
+  if (name === "scrape_web") {
+    if (!state.settings.enableWebSearch) {
+      throw new Error("Web search is currently disabled. Stop calling scrape_web.");
+    }
+    return runScrapeWeb(args);
+  }
   if (name === "get_time_info") {
     const now = new Date();
     return {

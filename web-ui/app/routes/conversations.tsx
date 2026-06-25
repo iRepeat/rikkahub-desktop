@@ -121,7 +121,11 @@ function ConversationSystemPromptButton({
         onClick={() => setExpanded((current) => !current)}
       >
         <Pencil className="size-3.5" />
-        <span>{hasCustomPrompt ? t("conversations.custom_prompt.button_active") : t("conversations.custom_prompt.button")}</span>
+        <span>
+          {hasCustomPrompt
+            ? t("conversations.custom_prompt.button_active")
+            : t("conversations.custom_prompt.button")}
+        </span>
       </Button>
       {expanded ? (
         <div className="mt-2 w-full max-w-3xl space-y-2">
@@ -201,8 +205,12 @@ function ThemeToggleButton() {
       variant="ghost"
       size="icon-sm"
       onClick={() => setTheme(isDark ? "light" : "dark")}
-      aria-label={isDark ? t("conversations.theme_toggle.to_light") : t("conversations.theme_toggle.to_dark")}
-      title={isDark ? t("conversations.theme_toggle.to_light") : t("conversations.theme_toggle.to_dark")}
+      aria-label={
+        isDark ? t("conversations.theme_toggle.to_light") : t("conversations.theme_toggle.to_dark")
+      }
+      title={
+        isDark ? t("conversations.theme_toggle.to_light") : t("conversations.theme_toggle.to_dark")
+      }
     >
       {isDark ? <Moon className="size-4" /> : <Sun className="size-4" />}
     </Button>
@@ -1437,7 +1445,9 @@ function ConversationsPageInner() {
         .join("")
         .trim();
       if (!text) continue;
-      lines.push(`${message.role === "USER" ? t("conversations.optimize_context.user") : t("conversations.optimize_context.assistant")}: ${text}`);
+      lines.push(
+        `${message.role === "USER" ? t("conversations.optimize_context.user") : t("conversations.optimize_context.assistant")}: ${text}`,
+      );
     }
     return lines.join("\n\n").slice(0, 4000);
   }, [selectedNodeMessages]);
@@ -1736,9 +1746,7 @@ function ConversationsPageInner() {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>{t("conversations.compress.dialog_title")}</DialogTitle>
-            <DialogDescription>
-              {t("conversations.compress.dialog_description")}
-            </DialogDescription>
+            <DialogDescription>{t("conversations.compress.dialog_description")}</DialogDescription>
           </DialogHeader>
           <div className="space-y-5">
             <div className="space-y-2">
@@ -1780,7 +1788,9 @@ function ConversationsPageInner() {
               </div>
             </div>
             <label className="block space-y-2">
-              <span className="text-sm font-medium">{t("conversations.compress.additional_prompt")}</span>
+              <span className="text-sm font-medium">
+                {t("conversations.compress.additional_prompt")}
+              </span>
               <Textarea
                 value={compressAdditionalPrompt}
                 onChange={(event) => setCompressAdditionalPrompt(event.target.value)}

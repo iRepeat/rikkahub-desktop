@@ -75,7 +75,10 @@ function ReasoningIcon({ level, className }: { level: ReasoningLevel; className?
   }
 }
 
-export function ReasoningPickerButtonImpl({ disabled = false, className }: ReasoningPickerButtonProps) {
+export function ReasoningPickerButtonImpl({
+  disabled = false,
+  className,
+}: ReasoningPickerButtonProps) {
   const { t } = useTranslation("input");
   const { settings, currentAssistant } = useCurrentAssistant();
   const { currentModel } = useCurrentModel();

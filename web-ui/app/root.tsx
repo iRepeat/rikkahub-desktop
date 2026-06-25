@@ -18,11 +18,9 @@ import "./i18n";
 import { Toaster } from "./components/ui/sonner";
 import { ThemeProvider } from "./components/theme-provider";
 import { TitleBar } from "./components/title-bar";
-import { UpdateDialog, type UpdateInfo } from "./components/update-dialog";
 import { WebAuthGate } from "./components/web-auth-gate";
 import { FontFaceInjector } from "./components/font-face-injector";
 import { openExternal } from "./lib/external-link";
-import api from "~/services/api";
 
 const queryClient = new QueryClient();
 
@@ -46,30 +44,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </body>
     </html>
   );
-}
-
-// Silent startup update check: queries GitHub once, shows the full download/install dialog
-// only when a newer version exists. Errors and "already latest" are swallowed completely.
-function SilentUpdateChecker() {
-  const [update, setUpdate] = React.useState<UpdateInfo | null>(null);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    api
-      .get<UpdateInfo>("update/check")
-      .then((info) => {
-        if (!cancelled && info.isNewer && !info.isSkipped) setUpdate(info);
-      })
-      .catch(() => {
-        /* network error — silently ignore */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (!update) return null;
-  return <UpdateDialog info={update} open={true} onClose={() => setUpdate(null)} />;
 }
 
 // 把中文字体插入英文字体 family 链:插在主字体之后、其余 fallback 之前。
@@ -184,7 +158,6 @@ function AppContent() {
       <WebAuthGate />
       <FontFaceInjector />
       <Toaster position="top-center" />
-      <SilentUpdateChecker />
     </ThemeProvider>
   );
 }

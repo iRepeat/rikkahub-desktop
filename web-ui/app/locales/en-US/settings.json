@@ -33,9 +33,7 @@
     "subtitle": "App identity, version, system info, website, GitHub and License.",
     "version": "Version",
     "system": "System",
-    "website": "Website",
-    "check_update": "Check for updates",
-    "check_failed": "Failed to check for updates"
+    "website": "Website"
   },
   "common": {
     "save_failed": "Save failed",

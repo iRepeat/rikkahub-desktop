@@ -128,9 +128,7 @@ export default function Markdown({
   // re-render,内联的 components 对象每次都是新引用,Streamdown 内部 memo 失效、重建自定义
   // 组件实例。稳定引用后只在实际依赖(displaySetting/workbench/citation 等)变化时才重建。
   // 返回类型从 Streamdown 自身推断,避免函数参数失去上下文变成隐式 any。
-  const components = React.useMemo<
-    NonNullable<Parameters<typeof Streamdown>[0]["components"]>
-  >(
+  const components = React.useMemo<NonNullable<Parameters<typeof Streamdown>[0]["components"]>>(
     () => ({
       pre: ({ children }) => <>{children}</>,
       code: ({ className, children, ...props }) => {

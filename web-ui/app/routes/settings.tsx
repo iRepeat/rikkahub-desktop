@@ -304,6 +304,36 @@ function applyAutoModelType<M extends { modelId?: string; type?: string }>(model
   return { ...model, type: inferred };
 }
 
+// ── Manual-models cache (in-memory, per provider) ────────────────────────────
+// Only manually-added models (manuallyAdded === true) are cached here — fetched models are
+// NOT. The point: a manual model has no upstream source to re-fetch from, so once the user
+// creates it we must never let it vanish from the list just because they toggled it off (or
+// navigated away and back, which clears the in-memory fetchedModels state). Toggling a
+// manual model off removes it from draft.models (the enabled list) but it stays here, so the
+// row remains visible with a dimmed checkbox. Fetched models keep their original behavior:
+// off + a page switch → gone (the user can just re-fetch).
+//
+// Module scope ⇒ survives component unmount (page/provider switches) but not an app restart.
+// On restart we fall back to draft.models; a manual model that was toggled off (and thus not
+// in draft.models) is lost — accepted, since this is an in-memory-only convenience.
+const manualModelsByProvider = new Map<string, Map<string, ProviderModel>>();
+
+function rememberManualModel(providerId: string, model: ProviderModel): void {
+  let bucket = manualModelsByProvider.get(providerId);
+  if (!bucket) {
+    bucket = new Map();
+    manualModelsByProvider.set(providerId, bucket);
+  }
+  // Keep the identity-stable id on update; refresh everything else from the incoming model
+  // so edits (display name, abilities, …) propagate to the cached copy too.
+  const existing = bucket.get(model.modelId);
+  bucket.set(model.modelId, existing ? { ...existing, ...model, id: existing.id } : model);
+}
+
+function forgetManualModel(providerId: string, modelId: string): void {
+  manualModelsByProvider.get(providerId)?.delete(modelId);
+}
+
 function moveItem<T>(items: T[], fromIndex: number, toIndex: number): T[] {
   if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return items;
   const next = [...items];
@@ -1070,13 +1100,23 @@ function ProvidersSection({
   // Display source: merge fetchedModels with draft.models, deduping by modelId. Fetched
   // entries win on overlap (canonical upstream view); manually-added extras are appended.
   // Persisted per-row customizations are still applied downstream via the `persisted` lookup.
+  // Manual models that were toggled off (absent from draft.models) are re-merged from the
+  // in-memory manual cache so they stay visible instead of disappearing — see
+  // manualModelsByProvider above. Fetched models are NOT cached: toggled off + a page switch
+  // still clears them (re-fetch to bring them back), preserving the original behavior.
   const displayModels: ProviderModel[] = (() => {
     const fetched = fetchedModels;
     const drafts = draft.models ?? [];
-    if (fetched.length === 0) return drafts;
     const fetchedIds = new Set(fetched.map((m) => m.modelId));
-    const extras = drafts.filter((m) => !fetchedIds.has(m.modelId));
-    return [...fetched, ...extras];
+    // Start from fetched (canonical) + drafts not in fetched.
+    const base = fetched.length === 0 ? drafts : [...fetched, ...drafts.filter((m) => !fetchedIds.has(m.modelId))];
+    // Re-add cached manual models that have dropped out of draft.models (toggled off).
+    const baseIds = new Set(base.map((m) => m.modelId));
+    const cachedManual = manualModelsByProvider.get(draft.id);
+    const danglingManual = cachedManual
+      ? Array.from(cachedManual.values()).filter((m) => !baseIds.has(m.modelId))
+      : [];
+    return danglingManual.length > 0 ? [...base, ...danglingManual] : base;
   })();
   // Free-text filter (name or id). Applied on top of displayModels for the list view.
   const visibleModels = (() => {
@@ -1510,6 +1550,10 @@ function ProvidersSection({
       models = [...without, model];
     }
     patchDraft({ models });
+    // Cache manual models so toggling them off later doesn't erase them from the list
+    // (they have no upstream source to re-fetch from). Also refreshes the cached copy on edit
+    // so display-name/ability changes propagate. Fetched models are intentionally not cached.
+    if (model.manuallyAdded === true) rememberManualModel(draft.id, model);
     toast.success(modelDialog.mode === "add" ? t("settings:providers.model_added") : t("settings:providers.model_saved"));
   };
 
@@ -1523,6 +1567,8 @@ function ProvidersSection({
         (item) => item.id !== target.id && item.modelId !== target.modelId,
       ),
     });
+    // Drop from the manual cache too, otherwise the deleted row would linger in the list.
+    if (target.manuallyAdded === true) forgetManualModel(draft.id, target.modelId);
     toast.success(t("settings:providers.model_deleted"));
   };
   const addProvider = async () => {

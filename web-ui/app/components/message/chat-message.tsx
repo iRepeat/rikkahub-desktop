@@ -236,10 +236,7 @@ function notifyContextLimit() {
   for (const listener of contextLimitListeners) listener();
 }
 function ensureContextLimit(modelId: string, providerType: string) {
-  if (
-    sharedContextLimit.modelId === modelId &&
-    sharedContextLimit.providerType === providerType
-  ) {
+  if (sharedContextLimit.modelId === modelId && sharedContextLimit.providerType === providerType) {
     return;
   }
   // 切到新模型:分母先回退到 undefined(getNerdStats 回退到 usage.contextLimit 快照),避免

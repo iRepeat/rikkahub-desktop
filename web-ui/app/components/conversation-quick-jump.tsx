@@ -59,7 +59,11 @@ function getRoleLabel(
   return t("quick_jump.role_message");
 }
 
-export function ConversationQuickJump({ items, activeIndex, onItemClick }: ConversationQuickJumpProps) {
+export function ConversationQuickJump({
+  items,
+  activeIndex,
+  onItemClick,
+}: ConversationQuickJumpProps) {
   const { t } = useTranslation();
   const canQuickJump = items.length > 1;
   const safeActiveIndex = Math.max(0, Math.min(activeIndex, items.length - 1));
@@ -92,10 +96,7 @@ export function ConversationQuickJump({ items, activeIndex, onItemClick }: Conve
   return (
     <div className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-3xl -translate-x-1/2 lg:block">
       <div className="pointer-events-auto absolute inset-y-4 -right-5 flex flex-col justify-center">
-        <div
-          ref={listRef}
-          className="flex min-h-0 flex-col items-start gap-1 overflow-y-auto"
-        >
+        <div ref={listRef} className="flex min-h-0 flex-col items-start gap-1 overflow-y-auto">
           {items.map((item, index) => {
             const isActive = index === safeActiveIndex;
             const roleLabel = getRoleLabel(item.role, t);

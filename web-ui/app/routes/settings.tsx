@@ -87,7 +87,6 @@ import type {
 import { ModelEditDialog } from "~/components/model-edit-dialog";
 import Markdown from "~/components/markdown/markdown";
 import { playAudio, stopAudio, useAudioPlaybackKey } from "~/lib/global-audio";
-import { UpdateDialog, type UpdateInfo } from "~/components/update-dialog";
 
 type Section =
   | "general"
@@ -782,7 +781,7 @@ export default function SettingsPage() {
   );
 }
 
-function SectionHeader({
+export function SectionHeader({
   icon: Icon,
   title,
   subtitle,
@@ -1109,7 +1108,10 @@ function ProvidersSection({
     const drafts = draft.models ?? [];
     const fetchedIds = new Set(fetched.map((m) => m.modelId));
     // Start from fetched (canonical) + drafts not in fetched.
-    const base = fetched.length === 0 ? drafts : [...fetched, ...drafts.filter((m) => !fetchedIds.has(m.modelId))];
+    const base =
+      fetched.length === 0
+        ? drafts
+        : [...fetched, ...drafts.filter((m) => !fetchedIds.has(m.modelId))];
     // Re-add cached manual models that have dropped out of draft.models (toggled off).
     const baseIds = new Set(base.map((m) => m.modelId));
     const cachedManual = manualModelsByProvider.get(draft.id);
@@ -1193,7 +1195,9 @@ function ProvidersSection({
             ),
           });
         })
-        .catch((error: Error) => toast.error(error.message || t("settings:providers.autosave_failed")));
+        .catch((error: Error) =>
+          toast.error(error.message || t("settings:providers.autosave_failed")),
+        );
     }, 700);
     return () => window.clearTimeout(timer);
   }, [draft, onSettings, settings]);
@@ -1240,7 +1244,8 @@ function ProvidersSection({
         onSettings(await api.get<Settings>("settings"));
         toast.success(t("settings:providers.test_img_ok"));
       } catch (error) {
-        const message = error instanceof Error ? error.message : t("settings:providers.test_img_failed");
+        const message =
+          error instanceof Error ? error.message : t("settings:providers.test_img_failed");
         setTestResult(message);
         toast.error(message);
       } finally {
@@ -1310,7 +1315,9 @@ function ProvidersSection({
               `${item.ok ? "✓" : "×"} ${item.mode}: ${item.status || "failed"}\n${item.preview}`,
           )
           .join("\n\n");
-        const preview = info?.preview ? t("settings:providers.test_preview", { preview: info.preview }) : "";
+        const preview = info?.preview
+          ? t("settings:providers.test_preview", { preview: info.preview })
+          : "";
         setTestResult([prefix, header, checkText, preview].filter(Boolean).join("\n\n"));
       };
       const reader = response.body.getReader();
@@ -1422,7 +1429,9 @@ function ProvidersSection({
       toast.success(t("settings:providers.enabled_models", { count: models.length }));
     } catch (error) {
       // 不 patch enabled —— 保持关闭
-      toast.error(error instanceof Error ? error.message : t("settings:providers.enable_fetch_failed"));
+      toast.error(
+        error instanceof Error ? error.message : t("settings:providers.enable_fetch_failed"),
+      );
     } finally {
       setFetchingModels(false);
     }
@@ -1437,10 +1446,17 @@ function ProvidersSection({
         { providerId: draft.id },
         { timeout: false },
       );
-      setBalanceResult(t("settings:providers.balance_done", { value: result.value, endpoint: result.endpoint, preview: result.preview }));
+      setBalanceResult(
+        t("settings:providers.balance_done", {
+          value: result.value,
+          endpoint: result.endpoint,
+          preview: result.preview,
+        }),
+      );
       toast.success(t("settings:providers.balance_ok", { value: result.value }));
     } catch (error) {
-      const message = error instanceof Error ? error.message : t("settings:providers.balance_failed");
+      const message =
+        error instanceof Error ? error.message : t("settings:providers.balance_failed");
       setBalanceResult(message);
       toast.error(message);
     } finally {
@@ -1565,7 +1581,11 @@ function ProvidersSection({
     // (they have no upstream source to re-fetch from). Also refreshes the cached copy on edit
     // so display-name/ability changes propagate. Fetched models are intentionally not cached.
     if (model.manuallyAdded === true) rememberManualModel(draft.id, model);
-    toast.success(modelDialog.mode === "add" ? t("settings:providers.model_added") : t("settings:providers.model_saved"));
+    toast.success(
+      modelDialog.mode === "add"
+        ? t("settings:providers.model_added")
+        : t("settings:providers.model_saved"),
+    );
   };
 
   const handleModelDialogDelete = () => {
@@ -1646,7 +1666,9 @@ function ProvidersSection({
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">{t("settings:providers.enabled_label")}</span>
+              <span className="text-sm text-muted-foreground">
+                {t("settings:providers.enabled_label")}
+              </span>
               <Switch
                 checked={draft.enabled}
                 disabled={fetchingModels}
@@ -1748,7 +1770,9 @@ function ProvidersSection({
             {kind === "openai" ? (
               <div className="flex items-start justify-between gap-3 rounded-md border px-3 py-3 md:col-span-2">
                 <div className="min-w-0 flex-1 space-y-1">
-                  <div className="text-sm font-medium">{t("settings:providers.history_reasoning_title")}</div>
+                  <div className="text-sm font-medium">
+                    {t("settings:providers.history_reasoning_title")}
+                  </div>
                   <div className="text-xs leading-relaxed text-muted-foreground">
                     {t("settings:providers.history_reasoning_desc")}
                   </div>
@@ -1766,7 +1790,9 @@ function ProvidersSection({
               <div className="grid gap-3 rounded-md border px-3 py-3 md:col-span-2 md:grid-cols-[1fr_180px]">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <div className="text-sm font-medium">{t("settings:providers.prompt_cache_title")}</div>
+                    <div className="text-sm font-medium">
+                      {t("settings:providers.prompt_cache_title")}
+                    </div>
                     <div className="text-xs text-muted-foreground">
                       {t("settings:providers.prompt_cache_desc")}
                     </div>
@@ -1943,7 +1969,11 @@ function ProvidersSection({
                               ? "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300"
                               : "border-border text-muted-foreground hover:bg-muted",
                           )}
-                          title={hasTool ? t("settings:providers.tool_enabled") : t("settings:providers.tool_disabled")}
+                          title={
+                            hasTool
+                              ? t("settings:providers.tool_enabled")
+                              : t("settings:providers.tool_disabled")
+                          }
                         >
                           {t("settings:providers.tool_short")}
                         </button>
@@ -1960,7 +1990,11 @@ function ProvidersSection({
                               ? "border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300"
                               : "border-border text-muted-foreground hover:bg-muted",
                           )}
-                          title={hasReasoning ? t("settings:providers.reasoning_enabled") : t("settings:providers.reasoning_disabled")}
+                          title={
+                            hasReasoning
+                              ? t("settings:providers.reasoning_enabled")
+                              : t("settings:providers.reasoning_disabled")
+                          }
                         >
                           {t("settings:providers.reasoning_short")}
                         </button>
@@ -1982,7 +2016,9 @@ function ProvidersSection({
           </div>
           <div className="space-y-2 rounded-md border px-3 py-2">
             <div className="flex items-center justify-between gap-3">
-              <span className="text-xs font-medium text-muted-foreground">{t("settings:providers.test_model")}</span>
+              <span className="text-xs font-medium text-muted-foreground">
+                {t("settings:providers.test_model")}
+              </span>
               <div className="flex items-center gap-2">
                 <Button variant="outline" onClick={test} disabled={testing}>
                   {testing ? (
@@ -1995,7 +2031,10 @@ function ProvidersSection({
                 <Button
                   variant="outline"
                   onClick={async () => {
-                    if (!window.confirm(t("settings:providers.delete_confirm", { name: draft.name }))) return;
+                    if (
+                      !window.confirm(t("settings:providers.delete_confirm", { name: draft.name }))
+                    )
+                      return;
                     await api.delete(`settings/provider/${encodeURIComponent(draft.id)}`);
                     const providers = settings.providers.filter((item) => item.id !== draft.id);
                     onSettings({ ...settings, providers });
@@ -2007,7 +2046,9 @@ function ProvidersSection({
                   <Trash2 className="size-4" />
                   {t("settings:providers.delete")}
                 </Button>
-                <span className="px-2 text-xs text-muted-foreground">{t("settings:providers.autosaved")}</span>
+                <span className="px-2 text-xs text-muted-foreground">
+                  {t("settings:providers.autosaved")}
+                </span>
               </div>
             </div>
             <Select value={effectiveTestModelId} onValueChange={setTestModelId}>
@@ -2056,7 +2097,9 @@ function ProvidersSection({
             </div>
             <div className="grid gap-3 md:grid-cols-2">
               <label className="space-y-2">
-                <span className="text-sm font-medium">{t("settings:providers.balance_api_path")}</span>
+                <span className="text-sm font-medium">
+                  {t("settings:providers.balance_api_path")}
+                </span>
                 <Input
                   value={textValue(balanceOption.apiPath) || "/credits"}
                   onChange={(event) =>
@@ -2067,7 +2110,9 @@ function ProvidersSection({
                 />
               </label>
               <label className="space-y-2">
-                <span className="text-sm font-medium">{t("settings:providers.balance_result_path")}</span>
+                <span className="text-sm font-medium">
+                  {t("settings:providers.balance_result_path")}
+                </span>
                 <Input
                   value={textValue(balanceOption.resultPath)}
                   onChange={(event) =>
@@ -2122,7 +2167,9 @@ function ProvidersSection({
                         {check
                           ? check.ok
                             ? t("settings:providers.check_ok", { status: check.status })
-                            : t("settings:providers.check_failed", { status: check.status || t("settings:providers.not_connected") })
+                            : t("settings:providers.check_failed", {
+                                status: check.status || t("settings:providers.not_connected"),
+                              })
                           : pending
                             ? t("settings:providers.in_progress")
                             : t("settings:providers.not_tested")}
@@ -2136,9 +2183,8 @@ function ProvidersSection({
           {isImageTestMode && testing && !imageTestResult ? (
             <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
               <Loader2 className="mr-2 inline size-4 animate-spin align-middle" />
-              {t("settings:providers.img_test_generating_pre")}<span className="font-medium text-foreground">
-                {effectiveTestModelId}
-              </span>{" "}
+              {t("settings:providers.img_test_generating_pre")}
+              <span className="font-medium text-foreground">{effectiveTestModelId}</span>{" "}
               {t("settings:providers.img_test_generating_post")}
             </div>
           ) : null}
@@ -2147,7 +2193,10 @@ function ProvidersSection({
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <div className="text-sm font-medium">{t("settings:providers.img_test_result")}</div>
                 <div className="text-xs text-muted-foreground">
-                  {t("settings:providers.img_test_model", { model: imageTestResult.modelId, duration: (imageTestResult.durationMs / 1000).toFixed(2) })}
+                  {t("settings:providers.img_test_model", {
+                    model: imageTestResult.modelId,
+                    duration: (imageTestResult.durationMs / 1000).toFixed(2),
+                  })}
                 </div>
               </div>
               <div className="flex flex-wrap items-start gap-3">
@@ -2159,7 +2208,9 @@ function ProvidersSection({
                   />
                 ) : null}
                 <div className="min-w-0 flex-1 text-xs text-muted-foreground">
-                  <div className="mb-1 font-medium text-foreground">{t("settings:providers.prompt_label")}</div>
+                  <div className="mb-1 font-medium text-foreground">
+                    {t("settings:providers.prompt_label")}
+                  </div>
                   <div className="whitespace-pre-wrap">{imageTestResult.prompt}</div>
                 </div>
               </div>
@@ -2808,26 +2859,19 @@ function AssistantsSection({
                 max={512}
                 step={1}
                 value={[
-                  typeof draft.contextMessageSize === "number"
-                    ? draft.contextMessageSize
-                    : 0,
+                  typeof draft.contextMessageSize === "number" ? draft.contextMessageSize : 0,
                 ]}
-                onValueChange={([next]) =>
-                  patchDraft({ contextMessageSize: next ?? 0 })
-                }
+                onValueChange={([next]) => patchDraft({ contextMessageSize: next ?? 0 })}
               />
               <Input
                 className="w-24"
                 inputMode="numeric"
                 value={
-                  typeof draft.contextMessageSize === "number" &&
-                  draft.contextMessageSize > 0
+                  typeof draft.contextMessageSize === "number" && draft.contextMessageSize > 0
                     ? String(draft.contextMessageSize)
                     : ""
                 }
-                placeholder={t(
-                  "settings:assistants.context_message_unlimited",
-                )}
+                placeholder={t("settings:assistants.context_message_unlimited")}
                 onChange={(event) => {
                   const raw = event.target.value.trim();
                   if (raw === "") {
@@ -2837,9 +2881,7 @@ function AssistantsSection({
                   const parsed = Math.floor(Number(raw));
                   patchDraft({
                     contextMessageSize:
-                      Number.isFinite(parsed) && parsed > 0
-                        ? Math.min(512, parsed)
-                        : 0,
+                      Number.isFinite(parsed) && parsed > 0 ? Math.min(512, parsed) : 0,
                   });
                 }}
               />
@@ -2976,15 +3018,31 @@ function AssistantsSection({
             </div>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               {[
-                ["time_info", t("settings:assistants.tools.time_info.title"), t("settings:assistants.tools.time_info.desc")],
+                [
+                  "time_info",
+                  t("settings:assistants.tools.time_info.title"),
+                  t("settings:assistants.tools.time_info.desc"),
+                ],
                 [
                   "javascript_engine",
                   t("settings:assistants.tools.js_engine.title"),
                   t("settings:assistants.tools.js_engine.desc"),
                 ],
-                ["clipboard", t("settings:assistants.tools.clipboard.title"), t("settings:assistants.tools.clipboard.desc")],
-                ["tts", t("settings:assistants.tools.tts.title"), t("settings:assistants.tools.tts.desc")],
-                ["ask_user", t("settings:assistants.tools.ask_user.title"), t("settings:assistants.tools.ask_user.desc")],
+                [
+                  "clipboard",
+                  t("settings:assistants.tools.clipboard.title"),
+                  t("settings:assistants.tools.clipboard.desc"),
+                ],
+                [
+                  "tts",
+                  t("settings:assistants.tools.tts.title"),
+                  t("settings:assistants.tools.tts.desc"),
+                ],
+                [
+                  "ask_user",
+                  t("settings:assistants.tools.ask_user.title"),
+                  t("settings:assistants.tools.ask_user.desc"),
+                ],
               ].map(([type, label, desc]) => {
                 const enabled =
                   Array.isArray(draft.localTools) &&
@@ -3024,7 +3082,9 @@ function AssistantsSection({
             </div>
           </div>
           <div className="rounded-md border p-3">
-            <div className="mb-3 text-sm font-medium">{t("settings:assistants.custom_request_title")}</div>
+            <div className="mb-3 text-sm font-medium">
+              {t("settings:assistants.custom_request_title")}
+            </div>
             <div className="grid gap-4 lg:grid-cols-2">
               <div className="space-y-3">
                 <div className="flex items-center justify-between gap-3">
@@ -3149,8 +3209,12 @@ function AssistantsSection({
           <div className="rounded-md border p-3">
             <div className="text-sm font-medium">{t("settings:assistants.ext_summary_title")}</div>
             <div className="mt-2 grid gap-2 text-xs text-muted-foreground md:grid-cols-2">
-              <div>{t("settings:assistants.ext_injection")}: {(draft.modeInjectionIds ?? []).length}</div>
-              <div>{t("settings:assistants.ext_lorebook")}: {(draft.lorebookIds ?? []).length}</div>
+              <div>
+                {t("settings:assistants.ext_injection")}: {(draft.modeInjectionIds ?? []).length}
+              </div>
+              <div>
+                {t("settings:assistants.ext_lorebook")}: {(draft.lorebookIds ?? []).length}
+              </div>
               <div>MCP: {(draft.mcpServers ?? []).length}</div>
               <div>
                 Local tools: {Array.isArray(draft.localTools) ? draft.localTools.length : 0}
@@ -3166,7 +3230,9 @@ function AssistantsSection({
               <Trash2 className="size-4" />
               {t("settings:assistants.delete")}
             </Button>
-            <div className="flex items-center px-2 text-xs text-muted-foreground">{t("settings:assistants.autosaved")}</div>
+            <div className="flex items-center px-2 text-xs text-muted-foreground">
+              {t("settings:assistants.autosaved")}
+            </div>
           </div>
         </div>
       </div>
@@ -5280,7 +5346,8 @@ function McpServerEditor({
       await pullSettings(onSettings);
       if (announce) toast.success(t("settings:mcp.server.saved"));
     } catch (error) {
-      if (announce) toast.error(error instanceof Error ? error.message : t("settings:mcp.save_failed"));
+      if (announce)
+        toast.error(error instanceof Error ? error.message : t("settings:mcp.save_failed"));
       else console.warn("MCP auto-save failed", error);
     } finally {
       setBusy(false);
@@ -5345,7 +5412,9 @@ function McpServerEditor({
           setToolsText("[]");
           dirtyRef.current = false;
         } catch (error) {
-          toast.error(error instanceof Error ? error.message : t("settings:mcp.server.create_failed"));
+          toast.error(
+            error instanceof Error ? error.message : t("settings:mcp.server.create_failed"),
+          );
         }
       }}
     >
@@ -5360,7 +5429,9 @@ function McpServerEditor({
         </div>
         <div className="grid gap-3 md:grid-cols-[1fr_auto]">
           <label className="space-y-1">
-            <span className="text-xs font-medium text-muted-foreground">{t("settings:mcp.name")}</span>
+            <span className="text-xs font-medium text-muted-foreground">
+              {t("settings:mcp.name")}
+            </span>
             <Input
               value={textValue(common.name)}
               onChange={(event) =>
@@ -5392,7 +5463,9 @@ function McpServerEditor({
           </Select>
         </div>
         <label className="space-y-1">
-          <span className="text-xs font-medium text-muted-foreground">{t("settings:mcp.server.url")}</span>
+          <span className="text-xs font-medium text-muted-foreground">
+            {t("settings:mcp.server.url")}
+          </span>
           <Input
             value={textValue(draft.url)}
             onChange={(event) => patchDraft({ ...draft, url: event.target.value })}
@@ -5403,7 +5476,9 @@ function McpServerEditor({
           </span>
         </label>
         <label className="space-y-1">
-          <span className="text-xs font-medium text-muted-foreground">{t("settings:mcp.server.headers_json")}</span>
+          <span className="text-xs font-medium text-muted-foreground">
+            {t("settings:mcp.server.headers_json")}
+          </span>
           <Textarea
             value={headersText}
             onChange={(event) => {
@@ -5418,7 +5493,9 @@ function McpServerEditor({
           </span>
         </label>
         <label className="space-y-1">
-          <span className="text-xs font-medium text-muted-foreground">{t("settings:mcp.server.tools_json")}</span>
+          <span className="text-xs font-medium text-muted-foreground">
+            {t("settings:mcp.server.tools_json")}
+          </span>
           <Textarea
             value={toolsText}
             onChange={(event) => {
@@ -5430,14 +5507,20 @@ function McpServerEditor({
           />
           <span className="block text-xs text-muted-foreground">
             {t("settings:mcp.server.tools_desc")}
-            {textValue(common.lastSyncError) ? t("settings:mcp.server.last_error", { error: textValue(common.lastSyncError) }) : ""}
+            {textValue(common.lastSyncError)
+              ? t("settings:mcp.server.last_error", { error: textValue(common.lastSyncError) })
+              : ""}
           </span>
         </label>
         <div className="rounded-md border">
-          <div className="border-b px-3 py-2 text-sm font-medium">{t("settings:mcp.server.tools_title")}</div>
+          <div className="border-b px-3 py-2 text-sm font-medium">
+            {t("settings:mcp.server.tools_title")}
+          </div>
           <div className="max-h-[28rem] overflow-auto p-2">
             {tools.length === 0 ? (
-              <div className="p-3 text-sm text-muted-foreground">{t("settings:mcp.server.tools_empty")}</div>
+              <div className="p-3 text-sm text-muted-foreground">
+                {t("settings:mcp.server.tools_empty")}
+              </div>
             ) : null}
             {/* McpToolCard mirror — first row: name + needs-approval switch + enable switch +
                 expand chevron. Expanded body: markdown description + JSON-schema property tags.
@@ -5497,7 +5580,11 @@ function McpServerEditor({
                       type="button"
                       onClick={() => setExpandedToolName(expanded ? null : name)}
                       className="text-muted-foreground hover:text-foreground"
-                      aria-label={expanded ? t("settings:mcp.server.collapse") : t("settings:mcp.server.expand")}
+                      aria-label={
+                        expanded
+                          ? t("settings:mcp.server.collapse")
+                          : t("settings:mcp.server.expand")
+                      }
                     >
                       <ChevronDownChip expanded={expanded} />
                     </button>
@@ -5683,7 +5770,9 @@ function LorebookEntryRow({
         <div className="space-y-3 border-t px-3 py-3">
           <div className="grid gap-3 md:grid-cols-2">
             <label className="space-y-1">
-              <span className="text-xs font-medium text-muted-foreground">{t("settings:mcp.name")}</span>
+              <span className="text-xs font-medium text-muted-foreground">
+                {t("settings:mcp.name")}
+              </span>
               <Input
                 value={textValue(entry.name)}
                 onChange={(event) => patch({ name: event.target.value })}
@@ -5691,7 +5780,9 @@ function LorebookEntryRow({
               />
             </label>
             <label className="space-y-1">
-              <span className="text-xs font-medium text-muted-foreground">{t("settings:mcp.priority")}</span>
+              <span className="text-xs font-medium text-muted-foreground">
+                {t("settings:mcp.priority")}
+              </span>
               <Input
                 type="number"
                 value={numberText(entry.priority)}
@@ -5700,13 +5791,17 @@ function LorebookEntryRow({
               />
             </label>
             <label className="space-y-1">
-              <span className="text-xs font-medium text-muted-foreground">{t("settings:mcp.position")}</span>
+              <span className="text-xs font-medium text-muted-foreground">
+                {t("settings:mcp.position")}
+              </span>
               <Select value={position} onValueChange={(value) => patch({ position: value })}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="before_system_prompt">{t("settings:mcp.pos.before")}</SelectItem>
+                  <SelectItem value="before_system_prompt">
+                    {t("settings:mcp.pos.before")}
+                  </SelectItem>
                   <SelectItem value="after_system_prompt">{t("settings:mcp.pos.after")}</SelectItem>
                   <SelectItem value="top_of_chat">{t("settings:mcp.pos.top")}</SelectItem>
                   <SelectItem value="bottom_of_chat">{t("settings:mcp.pos.bottom")}</SelectItem>
@@ -5716,7 +5811,9 @@ function LorebookEntryRow({
             </label>
             {usesStandaloneMessage ? (
               <label className="space-y-1">
-                <span className="text-xs font-medium text-muted-foreground">{t("settings:mcp.role")}</span>
+                <span className="text-xs font-medium text-muted-foreground">
+                  {t("settings:mcp.role")}
+                </span>
                 <Select
                   value={textValue(entry.role) || "USER"}
                   onValueChange={(value) => patch({ role: value })}
@@ -5733,7 +5830,9 @@ function LorebookEntryRow({
             ) : null}
             {position === "at_depth" ? (
               <label className="space-y-1">
-                <span className="text-xs font-medium text-muted-foreground">{t("settings:mcp.inject_depth")}</span>
+                <span className="text-xs font-medium text-muted-foreground">
+                  {t("settings:mcp.inject_depth")}
+                </span>
                 <Input
                   type="number"
                   min={1}
@@ -5796,7 +5895,9 @@ function LorebookEntryRow({
             </label>
           </div>
           <label className="space-y-1">
-            <span className="text-xs font-medium text-muted-foreground">{t("settings:mcp.inject_content")}</span>
+            <span className="text-xs font-medium text-muted-foreground">
+              {t("settings:mcp.inject_content")}
+            </span>
             <Textarea
               value={textValue(entry.content)}
               onChange={(event) => patch({ content: event.target.value })}
@@ -5880,7 +5981,9 @@ function KeywordChipInput({
       ))}
       <input
         className="min-w-32 flex-1 bg-transparent text-xs outline-none"
-        placeholder={disabled ? t("settings:mcp.keywords_disabled_ph") : t("settings:mcp.keywords_ph")}
+        placeholder={
+          disabled ? t("settings:mcp.keywords_disabled_ph") : t("settings:mcp.keywords_ph")
+        }
         value={value}
         disabled={disabled}
         onChange={(event) => setValue(event.target.value)}
@@ -5986,7 +6089,9 @@ function LorebookEditor({
           setDraft(next);
           dirtyRef.current = false;
         } catch (error) {
-          toast.error(error instanceof Error ? error.message : t("settings:mcp.lorebook.create_failed"));
+          toast.error(
+            error instanceof Error ? error.message : t("settings:mcp.lorebook.create_failed"),
+          );
         }
       }}
     >
@@ -6000,7 +6105,9 @@ function LorebookEditor({
         </div>
         <div className="grid gap-3 md:grid-cols-2">
           <label className="space-y-1">
-            <span className="text-xs font-medium text-muted-foreground">{t("settings:mcp.name")}</span>
+            <span className="text-xs font-medium text-muted-foreground">
+              {t("settings:mcp.name")}
+            </span>
             <Input
               value={textValue(draft.name)}
               onChange={(event) => patchDraft({ name: event.target.value })}
@@ -6009,10 +6116,16 @@ function LorebookEditor({
           </label>
           <label className="flex items-end gap-2">
             <span className="flex-1 space-y-1">
-              <span className="text-xs font-medium text-muted-foreground">{t("settings:mcp.lorebook.enable")}</span>
+              <span className="text-xs font-medium text-muted-foreground">
+                {t("settings:mcp.lorebook.enable")}
+              </span>
               <div className="rounded-md border px-3 py-2 text-sm">
                 <div className="flex items-center justify-between">
-                  <span>{draft.enabled === false ? t("settings:mcp.disabled") : t("settings:mcp.enabled")}</span>
+                  <span>
+                    {draft.enabled === false
+                      ? t("settings:mcp.disabled")
+                      : t("settings:mcp.enabled")}
+                  </span>
                   <Switch
                     checked={draft.enabled !== false}
                     onCheckedChange={(checked) => patchDraft({ enabled: checked })}
@@ -6023,7 +6136,9 @@ function LorebookEditor({
           </label>
         </div>
         <label className="space-y-1">
-          <span className="text-xs font-medium text-muted-foreground">{t("settings:mcp.lorebook.desc")}</span>
+          <span className="text-xs font-medium text-muted-foreground">
+            {t("settings:mcp.lorebook.desc")}
+          </span>
           <Input
             value={textValue(draft.description)}
             onChange={(event) => patchDraft({ description: event.target.value })}
@@ -6032,7 +6147,9 @@ function LorebookEditor({
         </label>
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <div className="text-sm font-medium">{t("settings:mcp.entries_count", { count: entries.length })}</div>
+            <div className="text-sm font-medium">
+              {t("settings:mcp.entries_count", { count: entries.length })}
+            </div>
             <Button
               type="button"
               variant="outline"
@@ -6346,7 +6463,11 @@ function PromptItemEditor({
           setDraft(next);
           dirtyRef.current = false;
         } catch (error) {
-          toast.error(error instanceof Error ? error.message : t("settings:mcp.item_create_failed", { title }));
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : t("settings:mcp.item_create_failed", { title }),
+          );
         }
       }}
     >
@@ -6365,7 +6486,9 @@ function PromptItemEditor({
         />
         <div className="grid gap-3 md:grid-cols-2">
           <label className="space-y-1">
-            <span className="text-xs font-medium text-muted-foreground">{t("settings:mcp.priority")}</span>
+            <span className="text-xs font-medium text-muted-foreground">
+              {t("settings:mcp.priority")}
+            </span>
             <Input
               type="number"
               value={numberText(draft.priority)}
@@ -6374,7 +6497,9 @@ function PromptItemEditor({
             />
           </label>
           <label className="space-y-1">
-            <span className="text-xs font-medium text-muted-foreground">{t("settings:mcp.position")}</span>
+            <span className="text-xs font-medium text-muted-foreground">
+              {t("settings:mcp.position")}
+            </span>
             <Select value={position} onValueChange={(value) => patchDraft({ position: value })}>
               <SelectTrigger>
                 <SelectValue />
@@ -6390,7 +6515,9 @@ function PromptItemEditor({
           </label>
           {usesStandaloneMessage ? (
             <label className="space-y-1">
-              <span className="text-xs font-medium text-muted-foreground">{t("settings:mcp.role")}</span>
+              <span className="text-xs font-medium text-muted-foreground">
+                {t("settings:mcp.role")}
+              </span>
               <Select
                 value={textValue(draft.role) || "USER"}
                 onValueChange={(value) => patchDraft({ role: value })}
@@ -6448,7 +6575,9 @@ function PromptItemEditor({
             value={textValue(draft.content)}
             onChange={(event) => patchDraft({ content: event.target.value })}
             className="min-h-64 font-mono text-xs leading-relaxed"
-            placeholder={t("settings:mcp.inject_content_template_ph", { cur_datetime: "{{cur_datetime}}" })}
+            placeholder={t("settings:mcp.inject_content_template_ph", {
+              cur_datetime: "{{cur_datetime}}",
+            })}
           />
         </div>
         <div className="flex justify-end gap-2">
@@ -6535,7 +6664,8 @@ function SkillsEditor({
         setSelected(name);
         if (announce) toast.success(t("settings:mcp.skill_saved"));
       } catch (error) {
-        if (announce) toast.error(error instanceof Error ? error.message : t("settings:mcp.save_failed"));
+        if (announce)
+          toast.error(error instanceof Error ? error.message : t("settings:mcp.save_failed"));
         else console.warn("Skill auto-save failed", error);
       } finally {
         setSaving(false);
@@ -6735,7 +6865,9 @@ function SkillsEditor({
           </div>
         ) : null}
         <div className="rounded-md border">
-          <div className="border-b px-3 py-2 text-sm font-medium">{t("settings:mcp.file_list")}</div>
+          <div className="border-b px-3 py-2 text-sm font-medium">
+            {t("settings:mcp.file_list")}
+          </div>
           <div className="max-h-40 overflow-auto p-2">
             {files.length === 0 ? (
               <div className="p-2 text-sm text-muted-foreground">{t("settings:mcp.no_files")}</div>
@@ -8544,30 +8676,15 @@ function ProxySection({
 function AboutSection() {
   const { t } = useTranslation();
   // Hard-coded current version — must match pc-server/server.ts:APP_VERSION and
-  // web-ui/src-tauri/tauri.conf.json:version. The update checker compares this against
-  // the latest GitHub release.
+  // web-ui/src-tauri/tauri.conf.json:version.
   const APP_VERSION = "1.2.5";
 
-  const [checking, setChecking] = React.useState(false);
-  const [updateInfo, setUpdateInfo] = React.useState<UpdateInfo | null>(null);
   // 真实系统版本(走 Tauri OS 插件),异步加载。
   const [systemSummary, setSystemSummary] = React.useState("");
 
   React.useEffect(() => {
     void getSystemInfo().then((info) => setSystemSummary(info.summary));
   }, []);
-
-  const checkForUpdate = async () => {
-    setChecking(true);
-    try {
-      const info = await api.get<UpdateInfo>("update/check");
-      setUpdateInfo(info);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("settings:about.check_failed"));
-    } finally {
-      setChecking(false);
-    }
-  };
 
   const aboutRows = [
     {
@@ -8576,7 +8693,6 @@ function AboutSection() {
       value: APP_VERSION,
       icon: Settings2,
       onClick: undefined,
-      action: "update" as const,
     },
     {
       key: "system",
@@ -8584,7 +8700,6 @@ function AboutSection() {
       value: systemSummary || "—",
       icon: Smartphone,
       onClick: undefined,
-      action: undefined,
     },
     {
       key: "website",
@@ -8600,7 +8715,6 @@ function AboutSection() {
       value: "https://github.com/yuh-G/rikkahub-desktop",
       icon: Github,
       onClick: () => void openExternal("https://github.com/yuh-G/rikkahub-desktop/"),
-      action: undefined,
     },
     {
       key: "license",
@@ -8609,7 +8723,6 @@ function AboutSection() {
       icon: FileClock,
       onClick: () =>
         void openExternal("https://github.com/yuh-G/rikkahub-desktop/blob/master/LICENSE"),
-      action: undefined,
     },
   ];
   return (
@@ -8635,28 +8748,7 @@ function AboutSection() {
                 </div>
                 <div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
                   <span className="truncate">{row.value}</span>
-                  {row.action === "update" ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="ml-2 shrink-0"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void checkForUpdate();
-                      }}
-                      disabled={checking}
-                    >
-                      {checking ? (
-                        <Loader2 className="size-3.5 animate-spin" />
-                      ) : (
-                        <RefreshCw className="size-3.5" />
-                      )}
-                      {t("settings:about.check_update")}
-                    </Button>
-                  ) : row.onClick ? (
-                    <ExternalLink className="size-3.5 shrink-0" />
-                  ) : null}
+                  {row.onClick ? <ExternalLink className="size-3.5 shrink-0" /> : null}
                 </div>
               </>
             );
@@ -8679,9 +8771,6 @@ function AboutSection() {
           })}
         </div>
       </div>
-      {updateInfo && (
-        <UpdateDialog info={updateInfo} open={true} onClose={() => setUpdateInfo(null)} />
-      )}
     </>
   );
 }

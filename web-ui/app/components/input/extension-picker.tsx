@@ -82,7 +82,10 @@ interface SkillProfile {
   description?: string;
 }
 
-export function ExtensionPickerButtonImpl({ disabled = false, className }: ExtensionPickerButtonProps) {
+export function ExtensionPickerButtonImpl({
+  disabled = false,
+  className,
+}: ExtensionPickerButtonProps) {
   const { t } = useTranslation("input");
   const { settings, currentAssistant } = useCurrentAssistant();
 

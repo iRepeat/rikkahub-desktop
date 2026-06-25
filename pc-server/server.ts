@@ -4780,9 +4780,10 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
   if (type === "tavily") {
     const apiKey = String(service.apiKey ?? "");
     if (!apiKey) throw new Error("Tavily API Key is empty");
+    const requestHeaders = { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` };
     const response = await fetch("https://api.tavily.com/search", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      headers: requestHeaders,
       body: JSON.stringify({ query, max_results: maxResults, search_depth: service.depth ?? "basic" }),
     });
     const raw = await response.json();
@@ -4795,6 +4796,9 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
       kind: "tool:search_web",
       toolName: "search_web",
       durationMs: Date.now() - started,
+      method: "POST",
+      requestHeaders,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
       requestPreview: jsonPreview({ query, maxResults }),
       responsePreview: jsonPreview(raw),
       error: response.ok ? undefined : jsonPreview(raw),
@@ -4813,9 +4817,10 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
     const apiKey = String(service.apiKey ?? "");
     const endpoint = "https://api.rikka-ai.com/v1/search";
     const requestBody = { q: query, depth: service.depth ?? "standard", outputType: "sourcedAnswer", includeImages: false };
+    const requestHeaders = { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) };
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+      headers: requestHeaders,
       body: JSON.stringify(requestBody),
     });
     const { text, raw } = await parseJsonResponse(response);
@@ -4828,6 +4833,9 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
       kind: "tool:search_web",
       toolName: "search_web",
       durationMs: Date.now() - started,
+      method: "POST",
+      requestHeaders,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
       requestPreview: jsonPreview(requestBody),
       responsePreview: textPreview(text),
       error: response.ok ? undefined : textPreview(text),
@@ -4846,9 +4854,10 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
   if (type === "exa") {
     const apiKey = String(service.apiKey ?? "");
     if (!apiKey) throw new Error("Exa API Key is empty");
+    const requestHeaders = { "Content-Type": "application/json", "x-api-key": apiKey };
     const response = await fetch("https://api.exa.ai/search", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": apiKey },
+      headers: requestHeaders,
       body: JSON.stringify({ query, numResults: maxResults }),
     });
     const raw = await response.json();
@@ -4861,6 +4870,9 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
       kind: "tool:search_web",
       toolName: "search_web",
       durationMs: Date.now() - started,
+      method: "POST",
+      requestHeaders,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
       requestPreview: jsonPreview({ query, maxResults }),
       responsePreview: jsonPreview(raw),
       error: response.ok ? undefined : jsonPreview(raw),
@@ -4880,9 +4892,10 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
     if (!apiKey) throw new Error("Zhipu API Key is empty");
     const endpoint = "https://open.bigmodel.cn/api/paas/v4/web_search";
     const requestBody = { search_query: query, search_engine: "search_std", count: maxResults };
+    const requestHeaders = { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` };
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      headers: requestHeaders,
       body: JSON.stringify(requestBody),
     });
     const { text, raw } = await parseJsonResponse(response);
@@ -4895,6 +4908,9 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
       kind: "tool:search_web",
       toolName: "search_web",
       durationMs: Date.now() - started,
+      method: "POST",
+      requestHeaders,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
       requestPreview: jsonPreview(requestBody),
       responsePreview: textPreview(text),
       error: response.ok ? undefined : textPreview(text),
@@ -4913,7 +4929,8 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
     const apiKey = String(service.apiKey ?? "");
     if (!apiKey) throw new Error("Brave API Key is empty");
     const endpoint = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${maxResults}`;
-    const response = await fetch(endpoint, { headers: { Accept: "application/json", "X-Subscription-Token": apiKey } });
+    const requestHeaders = { Accept: "application/json", "X-Subscription-Token": apiKey };
+    const response = await fetch(endpoint, { headers: requestHeaders });
     const { text, raw } = await parseJsonResponse(response);
     addLog({
       providerId: String(service.id ?? "search"),
@@ -4924,6 +4941,9 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
       kind: "tool:search_web",
       toolName: "search_web",
       durationMs: Date.now() - started,
+      method: "GET",
+      requestHeaders,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
       requestPreview: jsonPreview({ query, maxResults }),
       responsePreview: textPreview(text),
       error: response.ok ? undefined : textPreview(text),
@@ -4963,6 +4983,9 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
       kind: "tool:search_web",
       toolName: "search_web",
       durationMs: Date.now() - started,
+      method: "GET",
+      requestHeaders: headers,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
       requestPreview: jsonPreview({ query, maxResults, engines, language }),
       responsePreview: textPreview(text),
       error: response.ok ? undefined : textPreview(text),
@@ -4981,8 +5004,9 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
     const apiKey = String(service.apiKey ?? "");
     if (!apiKey) throw new Error("Tinyfish API Key is empty");
     const endpoint = `https://api.search.tinyfish.ai?query=${encodeURIComponent(query)}`;
+    const requestHeaders = { "X-API-Key": apiKey };
     const response = await fetch(endpoint, {
-      headers: { "X-API-Key": apiKey },
+      headers: requestHeaders,
     });
     const { text, raw } = await parseJsonResponse(response);
     addLog({
@@ -4994,6 +5018,9 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
       kind: "tool:search_web",
       toolName: "search_web",
       durationMs: Date.now() - started,
+      method: "GET",
+      requestHeaders,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
       requestPreview: jsonPreview({ query, maxResults }),
       responsePreview: textPreview(text),
       error: response.ok ? undefined : textPreview(text),
@@ -5013,15 +5040,19 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
     if (!apiKey) throw new Error("Perplexity API Key is empty");
     const endpoint = "https://api.perplexity.ai/search";
     const body: Record<string, JsonValue> = { query, max_results: maxResults };
+    const requestHeaders = { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      headers: requestHeaders,
       body: JSON.stringify(body),
     });
     const { text, raw } = await parseJsonResponse(response);
     addLog({
       providerId: String(service.id ?? "search"), providerName: nameOfSearchService(service),
       url: endpoint, ok: response.ok, status: response.status, kind: "search:perplexity",
+      method: "POST",
+      requestHeaders,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
       durationMs: Date.now() - started, requestPreview: jsonPreview(body), responsePreview: textPreview(text),
       toolName: "search_web", error: response.ok ? undefined : textPreview(text),
     });
@@ -5041,15 +5072,19 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
     const endpoint = "https://api.bochaai.com/v1/web-search";
     const summary = service.summary !== false;
     const body: Record<string, JsonValue> = { query, summary, count: maxResults };
+    const requestHeaders = { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      headers: requestHeaders,
       body: JSON.stringify(body),
     });
     const { text, raw } = await parseJsonResponse(response);
     addLog({
       providerId: String(service.id ?? "search"), providerName: nameOfSearchService(service),
       url: endpoint, ok: response.ok, status: response.status, kind: "search:bocha",
+      method: "POST",
+      requestHeaders,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
       durationMs: Date.now() - started, requestPreview: jsonPreview(body), responsePreview: textPreview(text),
       toolName: "search_web", error: response.ok ? undefined : textPreview(text),
     });
@@ -5069,15 +5104,19 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
     const endpoint = "https://api.linkup.so/v1/search";
     const depth = String(service.depth ?? "standard");
     const body: Record<string, JsonValue> = { q: query, depth, outputType: "sourcedAnswer", includeImages: "false" };
+    const requestHeaders = { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      headers: requestHeaders,
       body: JSON.stringify(body),
     });
     const { text, raw } = await parseJsonResponse(response);
     addLog({
       providerId: String(service.id ?? "search"), providerName: nameOfSearchService(service),
       url: endpoint, ok: response.ok, status: response.status, kind: "search:linkup",
+      method: "POST",
+      requestHeaders,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
       durationMs: Date.now() - started, requestPreview: jsonPreview(body), responsePreview: textPreview(text),
       toolName: "search_web", error: response.ok ? undefined : textPreview(text),
     });
@@ -5096,15 +5135,19 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
     if (!apiKey) throw new Error("Metaso API Key is empty");
     const endpoint = "https://metaso.cn/api/v1/search";
     const body: Record<string, JsonValue> = { q: query, scope: "webpage", size: maxResults, includeSummary: false };
+    const requestHeaders = { Authorization: `Bearer ${apiKey}`, Accept: "application/json", "Content-Type": "application/json" };
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json", "Content-Type": "application/json" },
+      headers: requestHeaders,
       body: JSON.stringify(body),
     });
     const { text, raw } = await parseJsonResponse(response);
     addLog({
       providerId: String(service.id ?? "search"), providerName: nameOfSearchService(service),
       url: endpoint, ok: response.ok, status: response.status, kind: "search:metaso",
+      method: "POST",
+      requestHeaders,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
       durationMs: Date.now() - started, requestPreview: jsonPreview(body), responsePreview: textPreview(text),
       toolName: "search_web", error: response.ok ? undefined : textPreview(text),
     });
@@ -5124,15 +5167,19 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
     const endpoint = "https://ollama.com/api/web_search";
     const clamped = Math.max(5, Math.min(10, maxResults));
     const body: Record<string, JsonValue> = { query, max_results: clamped };
+    const requestHeaders = { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      headers: requestHeaders,
       body: JSON.stringify(body),
     });
     const { text, raw } = await parseJsonResponse(response);
     addLog({
       providerId: String(service.id ?? "search"), providerName: nameOfSearchService(service),
       url: endpoint, ok: response.ok, status: response.status, kind: "search:ollama",
+      method: "POST",
+      requestHeaders,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
       durationMs: Date.now() - started, requestPreview: jsonPreview(body), responsePreview: textPreview(text),
       toolName: "search_web", error: response.ok ? undefined : textPreview(text),
     });
@@ -5151,15 +5198,19 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
     if (!apiKey) throw new Error("Jina API Key is empty");
     const searchUrl = String(service.searchUrl ?? "").trim() || "https://s.jina.ai/";
     const body: Record<string, JsonValue> = { q: query };
+    const requestHeaders = { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" };
     const response = await fetch(searchUrl, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
+      headers: requestHeaders,
       body: JSON.stringify(body),
     });
     const { text, raw } = await parseJsonResponse(response);
     addLog({
       providerId: String(service.id ?? "search"), providerName: nameOfSearchService(service),
       url: searchUrl, ok: response.ok, status: response.status, kind: "search:jina",
+      method: "POST",
+      requestHeaders,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
       durationMs: Date.now() - started, requestPreview: jsonPreview(body), responsePreview: textPreview(text),
       toolName: "search_web", error: response.ok ? undefined : textPreview(text),
     });
@@ -5178,15 +5229,19 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
     if (!apiKey) throw new Error("Firecrawl API Key is empty");
     const endpoint = "https://api.firecrawl.dev/v2/search";
     const body: Record<string, JsonValue> = { query, limit: maxResults };
+    const requestHeaders = { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      headers: requestHeaders,
       body: JSON.stringify(body),
     });
     const { text, raw } = await parseJsonResponse(response);
     addLog({
       providerId: String(service.id ?? "search"), providerName: nameOfSearchService(service),
       url: endpoint, ok: response.ok, status: response.status, kind: "search:firecrawl",
+      method: "POST",
+      requestHeaders,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
       durationMs: Date.now() - started, requestPreview: jsonPreview(body), responsePreview: textPreview(text),
       toolName: "search_web", error: response.ok ? undefined : textPreview(text),
     });
@@ -5229,15 +5284,19 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
       tools: [{ type: "web_search" }, { type: "x_search" }],
       store: false,
     };
+    const requestHeaders = { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      headers: requestHeaders,
       body: JSON.stringify(body),
     });
     const { text, raw } = await parseJsonResponse(response);
     addLog({
       providerId: String(service.id ?? "search"), providerName: nameOfSearchService(service),
       url: endpoint, ok: response.ok, status: response.status, kind: "search:grok",
+      method: "POST",
+      requestHeaders,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
       durationMs: Date.now() - started, requestPreview: jsonPreview(body), responsePreview: textPreview(text),
       toolName: "search_web", error: response.ok ? undefined : textPreview(text),
     });
@@ -5282,8 +5341,9 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
     return result;
   }
 
+  const requestHeaders = { "User-Agent": "Mozilla/5.0 RikkaHubPC/1.0" };
   const response = await fetch(`https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${maxResults}`, {
-    headers: { "User-Agent": "Mozilla/5.0 RikkaHubPC/1.0" },
+    headers: requestHeaders,
   });
   const html = await response.text();
   addLog({
@@ -5295,6 +5355,9 @@ async function runSearchWeb(params: Record<string, JsonValue>) {
     kind: "tool:search_web",
     toolName: "search_web",
     durationMs: Date.now() - started,
+    method: "GET",
+    requestHeaders,
+    responseHeaders: Object.fromEntries(response.headers.entries()),
     requestPreview: jsonPreview({ query, maxResults }),
     responsePreview: textPreview(stripHtml(html)),
     error: response.ok ? undefined : textPreview(html),
@@ -5342,9 +5405,10 @@ async function runScrapeWeb(params: Record<string, JsonValue>) {
     if (!apiKey) throw new Error("Tinyfish API Key is empty");
     const endpoint = "https://api.fetch.tinyfish.ai";
     const requestBody = { urls: [target], format: "markdown" };
+    const requestHeaders = { "Content-Type": "application/json", "X-API-Key": apiKey };
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+      headers: requestHeaders,
       body: JSON.stringify(requestBody),
     });
     const { text, raw } = await parseJsonResponse(response);
@@ -5357,6 +5421,9 @@ async function runScrapeWeb(params: Record<string, JsonValue>) {
       kind: "tool:scrape_web",
       toolName: "scrape_web",
       durationMs: Date.now() - started,
+      method: "POST",
+      requestHeaders,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
       requestPreview: jsonPreview(requestBody),
       responsePreview: textPreview(text),
       error: response.ok ? undefined : textPreview(text),
@@ -5373,7 +5440,8 @@ async function runScrapeWeb(params: Record<string, JsonValue>) {
       text: String(item?.text ?? "").slice(0, 12000),
     };
   }
-  const response = await fetch(target, { headers: { "User-Agent": "Mozilla/5.0 RikkaHubPC/1.0" } });
+  const requestHeaders = { "User-Agent": "Mozilla/5.0 RikkaHubPC/1.0" };
+  const response = await fetch(target, { headers: requestHeaders });
   const text = await response.text();
   addLog({
     providerId: "scrape_web",
@@ -5384,6 +5452,9 @@ async function runScrapeWeb(params: Record<string, JsonValue>) {
     kind: "tool:scrape_web",
     toolName: "scrape_web",
     durationMs: Date.now() - started,
+    method: "GET",
+    requestHeaders,
+    responseHeaders: Object.fromEntries(response.headers.entries()),
     requestPreview: jsonPreview({ url: target }),
     responsePreview: textPreview(stripHtml(text)),
     error: response.ok ? undefined : textPreview(text),

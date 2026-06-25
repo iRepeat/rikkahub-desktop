@@ -496,6 +496,12 @@ const skillsDir = join(dataDir, "skills");
 // 用户上传的自定义字体。跟 files/skills 同级,落在 pc-data/ 下,gitignored 且应用更新不覆盖。
 const customFontsDir = join(dataDir, "fonts");
 const statePath = join(dataDir, "state.json");
+// 会话活库(SQLite,WAL)。1.2.6:会话从 state.json 迁出,改用 SQLite 增量写——流式只
+// upsert 当前在长的那个节点行,不再每 200ms 全量重写 state.json。与备份库(导出时现场
+// 生成、Android 兼容)是不同文件/表名/schema:活库 pc_conversation/pc_message_node 为 PC
+// 超集(含 system_prompt / truncate_index,Android 备份库没有这两列)。
+// 详见 conversation-persistence-design.md。
+const conversationsDbPath = join(dataDir, "rikka_hub.db");
 const skipVersionPath = join(dataDir, "skip-version.txt");
 // 已下载更新包的缓存目录。放在持久的 dataDir 下(而非系统 tempDir)——系统临时目录会被
 // OS/磁盘清理/重启清掉,会导致"下次进更新界面又得重下"。Windows 存 .exe 安装器,Linux
@@ -3488,6 +3494,295 @@ function generateRikkaHubDb(dbPath: string): boolean {
     console.warn("[backup] cached db schema read failed:", err);
     return false;
   }
+}
+
+// ============================================================================
+// 会话活库(SQLite,1.2.6 引入)
+//
+// 会话从 state.json 搬进 rikka_hub.db,采用 Android APP 节点级 schema 的 PC 超集
+// (pc_conversation / pc_message_node,含 system_prompt / truncate_index——Android 备份库
+// 没有这两列)。内存模型 state.conversations 不变,启动时从这里整批读入;运行时:
+//   - 流式热路径:只 upsert 当前在长的那个 pc_message_node 行(脏标记 + 200ms 节流),
+//     SQLite 只把脏页追加进 WAL,开销与总会话数/总数据量无关——这是根除"每 200ms 全量
+//     重写 state.json"的关键。
+//   - 非流式变更(改名/编辑/分叉/导入/流结束):persistConversation 全量 reconcile。
+//
+// 与下方 insertConversationsIntoDb(写 Android 的 ConversationEntity/message_node)是不同
+// 文件、不同表名、不同 schema:备份库须 Android 兼容(有损、无 PC 超集列),活库须 PC 完整。
+// 备份始终从内存 state.conversations 现场生成,代码不动。详见设计文档。
+// ============================================================================
+
+// 1.2.6 会话迁移标记。写入 state.json.appliedMigrations 后,conversations 不再落进
+// state.json(瘦身),活库成为会话唯一来源。
+const CONVERSATIONS_SQLITE_MIGRATION = "conversations-sqlite-1.2.6";
+
+// 单一长连接:启动时打开(P1 接入 loadState),全程复用。每次开关库会丢 WAL/连接池,
+// 反而更慢更脆。P0 阶段不接线,保持 null。
+let conversationsDb: InstanceType<typeof Database> | null = null;
+
+// 活库行类型(SELECT 结果)。is_pinned 存 0/1;system_prompt 空 string 对应 null。
+interface PcConversationRow {
+  id: string;
+  assistant_id: string;
+  title: string;
+  system_prompt: string;
+  truncate_index: number;
+  suggestions: string;
+  is_pinned: number;
+  create_at: number;
+  update_at: number;
+}
+interface PcMessageNodeRow {
+  id: string;
+  node_index: number;
+  messages: string;
+  select_index: number;
+}
+
+/** 打开/创建会话活库并建表(幂等)。每次启动调一次,返回长连接。 */
+function openConversationsDb(): InstanceType<typeof Database> {
+  mkdirSync(dataDir, { recursive: true });
+  const db = new Database(conversationsDbPath, { create: true, readwrite: true });
+  // WAL:脏页进 -wal 旁文件,不重写主库——这是"增量写"的根本机制。
+  // synchronous=NORMAL:WAL 下足够安全且更快(每次 commit 不强制 fsync)。
+  // foreign_keys=ON:CASCADE 删除依赖它(删会话行自动带走其节点)。
+  // busy_timeout:并发写竞争时等待而非立即报 SQLITE_BUSY。
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA synchronous = NORMAL");
+  db.exec("PRAGMA foreign_keys = ON");
+  db.exec("PRAGMA busy_timeout = 5000");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pc_conversation (
+      id              TEXT PRIMARY KEY NOT NULL,
+      assistant_id    TEXT NOT NULL,
+      title           TEXT NOT NULL DEFAULT '',
+      system_prompt   TEXT NOT NULL DEFAULT '',
+      truncate_index  INTEGER NOT NULL DEFAULT -1,
+      suggestions     TEXT NOT NULL DEFAULT '[]',
+      is_pinned       INTEGER NOT NULL DEFAULT 0,
+      create_at       INTEGER NOT NULL,
+      update_at       INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS pc_message_node (
+      id              TEXT PRIMARY KEY NOT NULL,
+      conversation_id TEXT NOT NULL,
+      node_index      INTEGER NOT NULL,
+      messages        TEXT NOT NULL DEFAULT '[]',
+      select_index    INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (conversation_id) REFERENCES pc_conversation(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_pc_msg_node_conv ON pc_message_node(conversation_id);
+  `);
+  return db;
+}
+
+// 会话列表顺序 = state.conversations 数组顺序(GET /api/conversations 不排序,直接返回
+// 数组顺序)。而会话只在 unshift 时入数组(新建 L2057 / fork L14678),且 unshift 时刻
+// createAt = Date.now(),从不 sort/reorder/push。因此数组顺序严格等价于 createAt 倒序——
+// 这里用 ORDER BY create_at DESC, id DESC 还原,无需 sort_order 列、无需改内存模型。
+/** 读取全部会话(会话行 + 各自节点),组装成内存 Conversation[]。 */
+function loadAllConversationsFromDb(db: InstanceType<typeof Database>): Conversation[] {
+  const convRows = db.prepare(
+    "SELECT id, assistant_id, title, system_prompt, truncate_index, suggestions, is_pinned, create_at, update_at FROM pc_conversation ORDER BY create_at DESC, id DESC",
+  ).all() as PcConversationRow[];
+  const nodeStmt = db.prepare(
+    "SELECT id, node_index, messages, select_index FROM pc_message_node WHERE conversation_id = ? ORDER BY node_index ASC",
+  );
+  const conversations: Conversation[] = [];
+  for (const row of convRows) {
+    const nodeRows = nodeStmt.all(row.id) as PcMessageNodeRow[];
+    conversations.push({
+      id: row.id,
+      assistantId: row.assistant_id,
+      systemPrompt: row.system_prompt || null,
+      title: row.title ?? "",
+      messages: nodeRows.map((nr) => ({
+        id: nr.id,
+        messages: safeParseMessageArray(nr.messages),
+        selectIndex: nr.select_index ?? 0,
+      })),
+      truncateIndex: typeof row.truncate_index === "number" ? row.truncate_index : -1,
+      chatSuggestions: safeParseStringArray(row.suggestions),
+      isPinned: row.is_pinned === 1,
+      createAt: row.create_at,
+      updateAt: row.update_at,
+    });
+  }
+  return conversations;
+}
+
+function safeParseMessageArray(raw: string): Message[] {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as Message[]) : [];
+  } catch {
+    return [];
+  }
+}
+function safeParseStringArray(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map((v) => String(v)) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** upsert 单个会话行(不含节点)。流式中 updateAt/title 变化、以及全量 reconcile 复用。 */
+function upsertConversationRow(conv: Conversation): void {
+  if (!conversationsDb) throw new Error("conversationsDb not open");
+  conversationsDb.prepare(
+    "INSERT OR REPLACE INTO pc_conversation (id, assistant_id, title, system_prompt, truncate_index, suggestions, is_pinned, create_at, update_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    conv.id,
+    conv.assistantId || DEFAULT_ASSISTANT_ID,
+    conv.title || "",
+    conv.systemPrompt ?? "",
+    typeof conv.truncateIndex === "number" ? conv.truncateIndex : -1,
+    JSON.stringify(conv.chatSuggestions ?? []),
+    conv.isPinned ? 1 : 0,
+    conv.createAt || Date.now(),
+    conv.updateAt || Date.now(),
+  );
+}
+
+/** upsert 单个节点行(INSERT OR REPLACE)。流式热路径用,nodeIndex 由调用方提供。 */
+function upsertMessageNode(convId: string, node: MessageNode, nodeIndex: number): void {
+  if (!conversationsDb) throw new Error("conversationsDb not open");
+  conversationsDb.prepare(
+    "INSERT OR REPLACE INTO pc_message_node (id, conversation_id, node_index, messages, select_index) VALUES (?, ?, ?, ?, ?)",
+  ).run(
+    node.id,
+    convId,
+    nodeIndex,
+    JSON.stringify(node.messages ?? []),
+    node.selectIndex ?? 0,
+  );
+}
+
+/**
+ * 全量 reconcile:事务内 upsert 会话行 + 删除该会话全部旧节点 + 按当前顺序重插。
+ * 给非流式一次性变更用(改名/置顶/编辑/分叉/导入/流结束)。处理节点增删/重排,显而易见
+ * 地正确;一次用户动作调一次,可承受。
+ */
+function persistConversation(conv: Conversation): void {
+  if (!conversationsDb) throw new Error("conversationsDb not open");
+  const db = conversationsDb;
+  const deleteNodes = db.prepare("DELETE FROM pc_message_node WHERE conversation_id = ?");
+  const insertNode = db.prepare(
+    "INSERT OR REPLACE INTO pc_message_node (id, conversation_id, node_index, messages, select_index) VALUES (?, ?, ?, ?, ?)",
+  );
+  const txn = db.transaction(() => {
+    upsertConversationRow(conv);
+    deleteNodes.run(conv.id);
+    for (let i = 0; i < (conv.messages ?? []).length; i += 1) {
+      const node = conv.messages[i];
+      if (!node?.id) continue;
+      insertNode.run(node.id, conv.id, i, JSON.stringify(node.messages ?? []), node.selectIndex ?? 0);
+    }
+  });
+  txn();
+}
+
+/** 删除会话(CASCADE 带走其节点行,依赖 foreign_keys=ON)。 */
+function deletePcConversations(ids: string[]): void {
+  if (!conversationsDb || ids.length === 0) return;
+  const stmt = conversationsDb.prepare("DELETE FROM pc_conversation WHERE id = ?");
+  const txn = conversationsDb.transaction(() => {
+    for (const idValue of ids) stmt.run(idValue);
+  });
+  txn();
+}
+
+/** 会话总数。迁移校验/自测用。 */
+function countPcConversations(db: InstanceType<typeof Database>): number {
+  const row = db.prepare("SELECT COUNT(*) AS n FROM pc_conversation").get() as { n: number } | null;
+  return row?.n ?? 0;
+}
+
+// ----- 流式脏标记 + 节流 flush(仅会话活库用)-----
+//
+// 流式热路径不再走 scheduleThrottledSaveState(那会全量重写 state.json)。改成:每个 chunk
+// 把"正在长的会话行 + 节点"标脏,200ms 合并后逐个 upsert 进活库。多路流式并发时,脏集合
+// 累积各自 (convId, nodeId),flush 时从内存 state 算出正确 nodeIndex 逐行 upsert,SQLite
+// WAL 自带写串行化。bun:sqlite 同步,但单行 upsert 亚毫秒,阻塞可忽略。
+
+const dirtyConversationIds = new Set<string>();
+const dirtyNodeKeys = new Set<string>(); // `${convId}::${nodeId}`
+let pendingConvFlush: ReturnType<typeof setTimeout> | null = null;
+let lastConvFlushMs = 0;
+const CONV_FLUSH_INTERVAL_MS = 200;
+
+function markConversationRowDirty(convId: string): void {
+  dirtyConversationIds.add(convId);
+}
+function markMessageNodeDirty(convId: string, nodeId: string): void {
+  dirtyNodeKeys.add(`${convId}::${nodeId}`);
+}
+
+/**
+ * 遍历脏集合逐行 upsert,然后清空。从内存 state 解析 nodeIndex;若会话/节点已被并发删除
+ * (如流式中删会话),跳过——避免 INSERT OR REPLACE 把已删的行又建回来。
+ */
+function flushConvDirty(): void {
+  if (!conversationsDb) return;
+  lastConvFlushMs = Date.now();
+  const convIds = Array.from(dirtyConversationIds);
+  dirtyConversationIds.clear();
+  const nodeKeys = Array.from(dirtyNodeKeys);
+  dirtyNodeKeys.clear();
+  for (const convId of convIds) {
+    const conv = state.conversations.find((c) => c.id === convId);
+    if (!conv) continue;
+    try {
+      upsertConversationRow(conv);
+    } catch (err) {
+      console.warn("[conv-db] upsert conversation row failed", convId, err);
+    }
+  }
+  for (const key of nodeKeys) {
+    const sep = key.indexOf("::");
+    if (sep < 0) continue;
+    const convId = key.slice(0, sep);
+    const nodeId = key.slice(sep + 2);
+    const conv = state.conversations.find((c) => c.id === convId);
+    if (!conv) continue; // 删除正在流的会话竞态:会话已不在内存,不重建行
+    const idx = conv.messages.findIndex((n) => n.id === nodeId);
+    if (idx < 0) continue; // 节点已被删除/替换
+    try {
+      upsertMessageNode(convId, conv.messages[idx], idx);
+    } catch (err) {
+      console.warn("[conv-db] upsert message node failed", convId, nodeId, err);
+    }
+  }
+}
+
+/** 200ms 节流合并(镜像 scheduleThrottledSaveState 的结构,但同步执行——单行 upsert 亚毫秒)。 */
+function scheduleThrottledConvFlush(): void {
+  const now = Date.now();
+  const elapsed = now - lastConvFlushMs;
+  if (elapsed >= CONV_FLUSH_INTERVAL_MS) {
+    if (pendingConvFlush) {
+      clearTimeout(pendingConvFlush);
+      pendingConvFlush = null;
+    }
+    flushConvDirty();
+    return;
+  }
+  if (pendingConvFlush) return;
+  pendingConvFlush = setTimeout(() => {
+    pendingConvFlush = null;
+    flushConvDirty();
+  }, CONV_FLUSH_INTERVAL_MS - elapsed);
+}
+
+/** 立即 flush 并取消 pending 定时器。关停/流结束/导入前用。 */
+function flushConvDirtyNow(): void {
+  if (pendingConvFlush) {
+    clearTimeout(pendingConvFlush);
+    pendingConvFlush = null;
+  }
+  flushConvDirty();
 }
 
 function insertConversationsIntoDb(db: InstanceType<typeof Database>) {

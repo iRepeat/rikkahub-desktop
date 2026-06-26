@@ -3540,15 +3540,25 @@ function generateRikkaHubDb(dbPath: string): boolean {
     }
     for (const m of metaRows) { try { db.exec(`INSERT INTO android_metadata VALUES ('${m.locale}')`); } catch { /* */ } }
     for (const r of roomRows as any[]) { try { db.exec(`INSERT INTO room_master_table VALUES (${r.id}, '${r.identity_hash}')`); } catch { /* */ } }
+    // FTS5 虚拟表(message_fts)及其影子表都必须排除——APP 端 Room 会在 onOpen 自行重建。
+    // 影子表(message_fts_data / _idx / _content / _config / _docsize)在 sqlite_master 里
+    // 是普通 CREATE TABLE,不含 "USING fts5",单纯正则命中不到;若作为孤儿表落进备份 .db,
+    // APP 端 Room onOpen 执行 CREATE VIRTUAL TABLE ... USING fts5 时,FTS5 会尝试再建影子表,
+    // 撞 "table 'message_fts_data' already exists" 直接崩溃(只要做过手机端适配,之后任何带
+    // 会话的 PC 导出导入 APP 都必崩)。先收集所有 FTS5 虚拟表名,再按 <vtab>_ 前缀排除影子表。
+    const ftsVirtualTableNames = new Set<string>();
+    for (const row of schemaRows) {
+      if (row.type === "table" && row.name && /\bUSING\s+fts5\b/i.test(row.sql ?? "")) {
+        ftsVirtualTableNames.add(row.name);
+      }
+    }
+    const isFtsShadowTable = (name: string) =>
+      [...ftsVirtualTableNames].some((vtab) => name.startsWith(vtab + "_"));
     for (const row of schemaRows) {
       if (row.name === 'android_metadata' || row.name === 'room_master_table') continue;
       if (row.name?.startsWith('sqlite_')) continue;
-      // Skip FTS5 virtual tables. Creating one auto-generates shadow tables
-      // (message_fts_data, etc.) that Room expects to create itself in onOpen.
-      // If we pre-create them, Room's CREATE VIRTUAL TABLE ... IF NOT EXISTS
-      // still triggers shadow-table creation internally and crashes with
-      // "table 'message_fts_data' already exists".
       if (/\bUSING\s+fts5\b/i.test(row.sql ?? "")) continue;
+      if (row.name && isFtsShadowTable(row.name)) continue;
       try { db.exec(row.sql); } catch { /* */ }
     }
     insertConversationsIntoDb(db);

@@ -85,12 +85,11 @@ interface WebDavConfig {
 
 interface S3Config {
   endpoint: string;
-  region: string;
   accessKeyId: string;
   secretAccessKey: string;
   bucket: string;
-  prefix: string;
-  forcePathStyle: boolean;
+  region: string;
+  pathStyle: boolean;
   items: string[];
 }
 
@@ -592,7 +591,7 @@ function startAnalytics(): void {
 // MUST be kept in sync with web-ui/src-tauri/tauri.conf.json's `version` field. The update
 // checker compares this against the latest GitHub release tag and the version is also shown
 // verbatim in the About page. If you bump tauri.conf.json's version, bump this too.
-const APP_VERSION = "1.3.0";
+const APP_VERSION = "1.3.1";
 
 type GithubRelease = {
   tag_name?: string;
@@ -1091,12 +1090,11 @@ function defaultSettings(): Settings {
     },
     s3Config: {
       endpoint: "",
-      region: "us-east-1",
       accessKeyId: "",
       secretAccessKey: "",
       bucket: "",
-      prefix: "rikkahub_backups",
-      forcePathStyle: false,
+      region: "auto",
+      pathStyle: true,
       items: ["DATABASE", "FILES"],
     },
     proxyConfig: {
@@ -2604,14 +2602,18 @@ function normalizeWebDavConfig(value: unknown): WebDavConfig {
 function normalizeS3Config(value: unknown): S3Config {
   const raw = isRecord(value) ? value : {};
   const items = getStringArray(raw.items).filter((item) => item === "DATABASE" || item === "FILES");
+  // 对齐 APP 字段。兼容旧 PC 值:forcePathStyle → pathStyle(语义相同);prefix 已废弃(APP 用硬编码
+  // rikkahub_backups/),忽略。pathStyle/forcePathStyle 都缺失时默认 true(与 APP 默认一致)。
+  const hasPath = "pathStyle" in raw;
+  const hasForce = "forcePathStyle" in raw;
+  const pathStyle = hasPath ? raw.pathStyle === true : hasForce ? raw.forcePathStyle === true : true;
   return {
     endpoint: String(raw.endpoint ?? ""),
-    region: String(raw.region ?? "us-east-1") || "us-east-1",
     accessKeyId: String(raw.accessKeyId ?? ""),
     secretAccessKey: String(raw.secretAccessKey ?? ""),
     bucket: String(raw.bucket ?? ""),
-    prefix: String(raw.prefix ?? "rikkahub_backups") || "rikkahub_backups",
-    forcePathStyle: raw.forcePathStyle === true,
+    region: String(raw.region ?? "auto") || "auto",
+    pathStyle,
     items: items.length ? items : ["DATABASE", "FILES"],
   };
 }
@@ -3089,26 +3091,161 @@ function applyAndroidZipBackupFromPath(zipPath: string): { settingsImported: boo
   if (existsSync(settingsPath)) {
     try {
       const raw = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
-      // Android Settings → PC Settings field mapping. Most field names line up because PC
-      // mirrors the Android model; the few that don't (e.g. some camelCase variants) fall
-      // through normalizeState's defaults. The spread also carries through unknown keys
-      // (mcpServers, modeInjections, lorebooks, quickMessages) since TS types are erased at
-      // runtime, so those settings round-trip without explicit mapping.
-      // Avatar type strings come in as Android FQNs; rewrite them back to PC's short form
-      // (dummy/emoji/image) so the UI code paths that branch on type === "dummy" etc.
-      // keep working.
-      // APP→PC:以 PC 为基底,只引入 APP 独有的配置;PC 已有的(含 apiKey、自定义 provider/助手)
-      // 一律保留。旧逻辑 {...PC.settings, ...APP} 是浅合并,APP 的 providers/assistants 数组会
-      // 整体覆盖 PC,导入备份时 PC 配的 apiKey 等定制全丢(Issue: 导入空 APP 备份清空 PC 配置)。
-      // 标量字段 PC 优先;providers/assistants/searchServices 按 id 合并(PC 为主 + APP 独有)。
+      // APP→PC 导入的 settings 合并(七层策略,灵活处理):
+      //   1) ...app 基底:APP 全字段进来,含 PC 不认识的 APP 独有字段(customThemes / fastModelId /
+      //      enableSuggestion / webServer* / backupReminderConfig 等),不漏。PC 运行时不读的多余字段
+      //      原样保留,saveState 写回、PC→APP 回导还能用。
+      //   2) 标量配置(默认模型选择 / 各类 prompt / 主题 / 布尔开关):PC 缺失或仍=出厂默认 = 用户没在
+      //      PC 定制 → 采用 APP(APP 是主力端);PC 已定制 → 保 PC。pick() 同时判 null 和 ===。
+      //   3) 含 apiKey 的集合(providers/asr/tts):mergeById(PC, APP) PC 优先,保 PC 的 key 与定义,
+      //      APP 独有条目追加。searchServices 单独处理——两端 id 都是随机生成(defaultSettings 用 id()、
+      //      Android 用 Uuid.random()),mergeById 按 id 去重会翻倍,改按 type 去重(见 mergeSearchByType)。
+      //   4) 用户内容集合(assistants/mcpServers/lorebooks/quickMessages/modeInjections/assistantTags):
+      //      mergeById(APP, PC) APP 优先(改名/配置进来),PC 独有追加。id 是 UUID 且两端默认空,撞 id
+      //      极罕见——MCP 凭证在 commonOptions.headers,撞 id 时可能丢 PC token,可接受。
+      //   5) favoriteModels:元素是 model UUID(string)非 {id} 对象,用 Set 去重取并集。
+      //   6) displaySetting / searchCommonOptions:对象 shallow merge,APP 字段进来、PC 独有保留;
+      //      displaySetting.userNickname 非空、userAvatar 非 Dummy 才覆盖;chatFontFamily 永远保 PC
+      //      (APP 是 enum 字符串、PC 是字体名,手机端字体 PC 未必安装)。
+      //   7) webDav/s3:两端结构对齐后,PC 已配置保 PC、PC 空采用 APP(APP 也有此功能)。
+      //      proxy/jwt/port/promptOptimize* 是 PC 独有(Android 无),永远保 PC。
+      // 历史:{...PC,...APP} 浅合并丢 key;Plan B 全 PC 优先把 APP 同 id 助手/MCP/世界书挡在外面;
+      //      三轮分流只覆盖 10 个集合,标量全走 PC 基底→默认模型/提示词/主题/收藏/标签全丢;七层方案补齐
+      //      后又发现 searchServices 两端随机 id 致 mergeById 翻倍、webDav 误判 PC 独有被丢——本轮修正。
+      const pc = state.settings;
+      const app = raw as Record<string, JsonValue>;
+      const defaults = defaultSettings();
+      // 标量:APP 有该字段、且 PC 缺失(null)或仍=出厂默认 → 采用 APP;否则保 PC。APP 没该字段时保 PC。
+      const pick = (key: string): unknown => {
+        const pcVal = (pc as Record<string, unknown>)[key];
+        if (!(key in app)) return pcVal;
+        const defVal = (defaults as Record<string, unknown>)[key];
+        return pcVal == null || pcVal === defVal ? app[key] : pcVal;
+      };
+      // searchServices 两端 id 都是随机生成(defaultSettings 用 id()、Android 用 Uuid.random()),mergeById
+      // 按 id 去重会把 APP 的全部追加 → 搜索服务翻倍。改按 type 去重:同 type 时 APP 配了 apiKey 而 PC
+      // 对应项没有 → 用 APP(把 key 带过来);否则保 PC;APP 独有 type 追加。无 type 的脏数据当独有项追加。
+      const mergeSearchByType = (
+        pcList: { type?: string; apiKey?: JsonValue; id: string }[],
+        appList: { type?: string; apiKey?: JsonValue; id: string }[],
+      ) => {
+        const result = [...pcList];
+        const typeToIdx = new Map<string, number>();
+        result.forEach((s, i) => {
+          const t = String(s.type ?? "");
+          if (t && !typeToIdx.has(t)) typeToIdx.set(t, i);
+        });
+        for (const appSvc of appList) {
+          const t = String(appSvc.type ?? "");
+          if (!t) { result.push(appSvc); continue; }
+          const idx = typeToIdx.get(t);
+          if (idx === undefined) {
+            typeToIdx.set(t, result.length);
+            result.push(appSvc);
+          } else if (String(appSvc.apiKey ?? "").trim() && !String(result[idx].apiKey ?? "").trim()) {
+            result[idx] = appSvc; // APP 有 key、PC 没有 → 用 APP
+          }
+        }
+        return result;
+      };
+      const mergedSearchServices = mergeSearchByType(
+        (Array.isArray(pc.searchServices) ? pc.searchServices : []) as { type?: string; apiKey?: JsonValue; id: string }[],
+        (Array.isArray(app.searchServices) ? app.searchServices : []) as { type?: string; apiKey?: JsonValue; id: string }[],
+      );
+      // searchServiceSelected 存的是数组下标,合并后顺序变了。PC 段在合并列表前部、顺序不变,故 PC 非默认
+      // 时其索引仍有效直接保;PC=默认(0)= 用户没在 PC 选过 → 采用 APP 选中意图:取 APP 选中服务的 type
+      // 在合并列表重新定位,找不到回退 0(脏数据 / APP 列表为空时兜底)。
+      const resolveSearchSelected = (): number => {
+        if (pc.searchServiceSelected !== defaults.searchServiceSelected) return pc.searchServiceSelected;
+        const appIdx = Number(app.searchServiceSelected);
+        const appList = (Array.isArray(app.searchServices) ? app.searchServices : []) as { type?: string }[];
+        const targetType = String(appList[appIdx]?.type ?? "");
+        if (!targetType) return 0;
+        const found = mergedSearchServices.findIndex((s) => String(s.type ?? "") === targetType);
+        return found >= 0 ? found : 0;
+      };
+      // displaySetting 两端字段不同(PC 有 uiFontFamilyCss/chatInputHeight,APP 有 showDateTimeInMessage/
+      // 触觉/通知等)。shallow merge;身份字段 + chatFontFamily 做兜底。APP 的 userAvatar type 可能是
+      // Android FQN(...Avatar.Dummy),rewriteAvatarsInSettings 后续转 PC 短格式,这里同时兜住 FQN 与短格式。
+      // chatFontFamily:APP 是 enum 字符串(DEFAULT/MONOSPACE/CUSTOM)、PC 是字体名,且手机端字体 PC 未必
+      // 安装,类型与可用性都不一致 → 永远保 PC,不接管 APP 值。
+      const pcDisplay = (pc.displaySetting ?? {}) as Record<string, JsonValue>;
+      const appDisplay = (app.displaySetting as Record<string, JsonValue> | undefined) ?? {};
+      const mergedDisplay: Record<string, JsonValue> = { ...pcDisplay };
+      for (const [k, v] of Object.entries(appDisplay)) {
+        if (k === "userNickname") {
+          if (typeof v === "string" && v.trim()) mergedDisplay.userNickname = v;
+        } else if (k === "userAvatar") {
+          const avatarType = String((v as Record<string, JsonValue> | null)?.type ?? "");
+          if (v && !/\.Dummy$/i.test(avatarType) && avatarType.toLowerCase() !== "dummy") {
+            mergedDisplay.userAvatar = v;
+          }
+        } else if (k === "chatFontFamily") {
+          // 字体两端语义/可用性不同 → 保 PC
+        } else {
+          mergedDisplay[k] = v;
+        }
+      }
+      // WebDavConfig 两端结构完全一致(url/username/password/path/items)。PC 已配置(url 非空)= PC 上
+      // 验证过能用且含密钥 → 保 PC;PC 空(url 空)= 用户没在 PC 配过 → 采用 APP 的(主力端配置)。
+      const mergedWebDav = String((pc.webDavConfig as Record<string, JsonValue> | null)?.url ?? "").trim()
+        ? pc.webDavConfig
+        : (app.webDavConfig ?? pc.webDavConfig);
+      // S3Config 对齐 APP 后两端结构一致。PC 已配置(endpoint 非空)→ 保 PC;PC 空 → 采用 APP。
+      const mergedS3 = String((pc.s3Config as Record<string, JsonValue> | null)?.endpoint ?? "").trim()
+        ? pc.s3Config
+        : (app.s3Config ?? pc.s3Config);
       const merged = {
-        ...raw,
-        ...state.settings,
-        providers: mergeById(state.settings.providers ?? [], Array.isArray(raw.providers) ? raw.providers : []),
-        assistants: mergeById(state.settings.assistants ?? [], Array.isArray(raw.assistants) ? raw.assistants : []),
-        searchServices: mergeById(state.settings.searchServices ?? [], Array.isArray(raw.searchServices) ? raw.searchServices : []),
+        ...app,
+        dynamicColor: pick("dynamicColor"),
+        themeId: pick("themeId"),
+        developerMode: pick("developerMode"),
+        enableWebSearch: pick("enableWebSearch"),
+        chatModelId: pick("chatModelId"),
+        titleModelId: pick("titleModelId"),
+        translateModeId: pick("translateModeId"),
+        suggestionModelId: pick("suggestionModelId"),
+        imageGenerationModelId: pick("imageGenerationModelId"),
+        ocrModelId: pick("ocrModelId"),
+        compressModelId: pick("compressModelId"),
+        translateThinkingBudget: pick("translateThinkingBudget"),
+        titlePrompt: pick("titlePrompt"),
+        translatePrompt: pick("translatePrompt"),
+        suggestionPrompt: pick("suggestionPrompt"),
+        ocrPrompt: pick("ocrPrompt"),
+        compressPrompt: pick("compressPrompt"),
+        selectedASRProviderId: pick("selectedASRProviderId"),
+        selectedTTSProviderId: pick("selectedTTSProviderId"),
+        assistantId: pick("assistantId"),
+        providers: mergeById(pc.providers ?? [], (Array.isArray(app.providers) ? app.providers : []) as { id: string }[]),
+        searchServices: mergedSearchServices,
+        searchServiceSelected: resolveSearchSelected(),
+        asrProviders: mergeById(pc.asrProviders ?? [], (Array.isArray(app.asrProviders) ? app.asrProviders : []) as { id: string }[]),
+        ttsProviders: mergeById(pc.ttsProviders ?? [], (Array.isArray(app.ttsProviders) ? app.ttsProviders : []) as { id: string }[]),
+        assistants: mergeById((Array.isArray(app.assistants) ? app.assistants : []) as { id: string }[], pc.assistants ?? []),
+        mcpServers: mergeById((Array.isArray(app.mcpServers) ? app.mcpServers : []) as { id: string }[], pc.mcpServers ?? []),
+        lorebooks: mergeById((Array.isArray(app.lorebooks) ? app.lorebooks : []) as { id: string }[], pc.lorebooks ?? []),
+        quickMessages: mergeById((Array.isArray(app.quickMessages) ? app.quickMessages : []) as { id: string }[], pc.quickMessages ?? []),
+        modeInjections: mergeById((Array.isArray(app.modeInjections) ? app.modeInjections : []) as { id: string }[], pc.modeInjections ?? []),
+        assistantTags: mergeById((Array.isArray(app.assistantTags) ? app.assistantTags : []) as { id: string }[], pc.assistantTags ?? []),
+        favoriteModels: Array.from(new Set([
+          ...(Array.isArray(pc.favoriteModels) ? pc.favoriteModels : []),
+          ...(Array.isArray(app.favoriteModels) ? (app.favoriteModels as string[]) : []),
+        ])),
+        displaySetting: mergedDisplay,
+        searchCommonOptions: {
+          ...(pc.searchCommonOptions ?? {}),
+          ...((app.searchCommonOptions as Record<string, JsonValue> | undefined) ?? {}),
+        },
+        webDavConfig: mergedWebDav,
+        s3Config: mergedS3,
+        proxyConfig: pc.proxyConfig,
+        webServerJwtEnabled: pc.webServerJwtEnabled,
+        preferredPort: pc.preferredPort,
+        promptOptimizeModelId: pc.promptOptimizeModelId,
+        promptOptimizePrompt: pc.promptOptimizePrompt,
       } as State["settings"];
-      const adjusted = rewriteAvatarsInSettings(merged, ANDROID_AVATAR_TYPE_TO_PC);
+      const adjusted = rewriteAvatarsInSettings(merged, ANDROID_AVATAR_TYPE_TO_PC, "to-pc");
       state = normalizeState({ ...state, settings: adjusted as State["settings"] });
       settingsImported = true;
     } catch (err) {
@@ -3285,6 +3422,34 @@ function importAndroidConversations(extractDir: string, dbPath: string, androidF
     // Re-sort by updateAt desc so the imported conversations land in the natural "most
     // recent first" order alongside any PC-side conversations the user already had.
     state.conversations = Array.from(existingById.values()).sort((a, b) => b.updateAt - a.updateAt);
+
+    // 助手记忆:Android 存在同库的 MemoryEntity 表(字段 id / assistant_id / content,无时间戳),
+    // PC 之前只读 ConversationEntity + message_node,完全漏了这张表。按 (assistantId, content) 去重
+    // merge 进 state.memories——PC 已有的相同内容不重复导入;Android 的 Int 自增 id 和 PC 的 id 空间
+    // 不一致,统一用 state.nextMemoryId 重新分配。global 记忆的 assistant_id 两端都是 "__global__"。
+    // MemoryEntity 不存在(老版本 APP / 空库)时查询抛错,静默跳过。
+    try {
+      const memoryRows = db.query("SELECT assistant_id, content FROM MemoryEntity").all() as Record<string, unknown>[];
+      const now = Date.now();
+      const seen = new Set(state.memories.map((m) => `${m.assistantId} ${m.content}`));
+      for (const row of memoryRows) {
+        const assistantId = String(row.assistant_id ?? GLOBAL_MEMORY_ID) || GLOBAL_MEMORY_ID;
+        const content = String(row.content ?? "").trim();
+        if (!content) continue;
+        const key = `${assistantId} ${content}`;
+        if (seen.has(key)) continue;
+        state.memories.push({
+          id: state.nextMemoryId++,
+          assistantId,
+          content,
+          createdAt: now,
+          updatedAt: now,
+        });
+        seen.add(key);
+      }
+    } catch (err) {
+      console.warn("[import] failed to read MemoryEntity table:", err);
+    }
     return imported;
   } finally {
     db.close();
@@ -3468,34 +3633,41 @@ function mapAvatarType(value: JsonValue, mapping: Record<string, string>): JsonV
   return { ...value, type: mapping[type] };
 }
 
-/** Deep-copy a Settings record with every avatar field rewritten through `mapping`.
- *  Mutates a clone, doesn't touch the caller's value. Targets the two known avatar
- *  locations: per-assistant avatars and displaySetting.userAvatar.
- *  Also strips PC-only fields that would cause Android deserialization errors. */
-function rewriteAvatarsInSettings(settings: any, mapping: Record<string, string>): any {
+/** 方向感知的 settings 转换。
+ *  - "to-android"(默认,PC→APP 导出):映射 avatar + strip PC-only 字段 + role/reasoningLevel
+ *    转小写 + 空 UUID 填随机。strip 是 Android kotlinx.serialization 的硬要求——PC-only 字段
+ *    进去 Android 无法反序列化、Android Uuid 反序列化拒空串。
+ *  - "to-pc"(APP→PC 导入):只映射 avatar(Android FQN → PC 短格式)。不 strip、不填 UUID、不动
+ *    role——PC 端接受 null/大写,且 PC-only 字段(proxyConfig / preferredPort / 字体 / 助手的
+ *    mcpToolOverrides 等)必须原样保留,否则一次导入就会清空 PC 上已配置的代理、端口、字体
+ *    与 MCP 覆盖,也会把未选模型的 null chatModelId 填成不存在的随机 UUID。 */
+function rewriteAvatarsInSettings(settings: any, mapping: Record<string, string>, direction: "to-android" | "to-pc" = "to-android"): any {
   if (!isRecord(settings)) return settings;
+  const stripPcOnly = direction === "to-android";
   const copy: any = { ...settings };
   if (Array.isArray(copy.assistants)) {
     copy.assistants = copy.assistants.map((a: any) => {
       if (!isRecord(a)) return a;
       const fixed: any = { ...a };
       if (fixed.avatar) fixed.avatar = mapAvatarType(fixed.avatar, mapping);
-      // reasoningLevel: PC uses "AUTO", Android expects "auto"
-      if (typeof fixed.reasoningLevel === "string") fixed.reasoningLevel = fixed.reasoningLevel.toLowerCase();
-      // presetMessages role: PC uses "USER"/"ASSISTANT", Android expects "user"/"assistant"
-      if (Array.isArray(fixed.presetMessages)) {
-        fixed.presetMessages = fixed.presetMessages.map((pm: any) =>
-          isRecord(pm) && typeof pm.role === "string" ? { ...pm, role: pm.role.toLowerCase() } : pm,
-        );
+      if (stripPcOnly) {
+        // reasoningLevel: PC uses "AUTO", Android expects "auto"
+        if (typeof fixed.reasoningLevel === "string") fixed.reasoningLevel = fixed.reasoningLevel.toLowerCase();
+        // presetMessages role: PC uses "USER"/"ASSISTANT", Android expects "user"/"assistant"
+        if (Array.isArray(fixed.presetMessages)) {
+          fixed.presetMessages = fixed.presetMessages.map((pm: any) =>
+            isRecord(pm) && typeof pm.role === "string" ? { ...pm, role: pm.role.toLowerCase() } : pm,
+          );
+        }
+        // Strip PC-only assistant fields that Android doesn't have
+        delete fixed.mcpToolOverrides;
+        delete fixed.allowConversationSystemPrompt;
       }
-      // Strip PC-only assistant fields that Android doesn't have
-      delete fixed.mcpToolOverrides;
-      delete fixed.allowConversationSystemPrompt;
       return fixed;
     });
   }
   // modeInjections role: PC uses "USER", Android expects "user"
-  if (Array.isArray(copy.modeInjections)) {
+  if (stripPcOnly && Array.isArray(copy.modeInjections)) {
     copy.modeInjections = copy.modeInjections.map((mi: any) =>
       isRecord(mi) && typeof mi.role === "string" ? { ...mi, role: mi.role.toLowerCase() } : mi,
     );
@@ -3505,24 +3677,28 @@ function rewriteAvatarsInSettings(settings: any, mapping: Record<string, string>
     if (displaySetting.userAvatar) {
       displaySetting.userAvatar = mapAvatarType(displaySetting.userAvatar, mapping);
     }
-    // Strip PC-only displaySetting fields that Android can't deserialize:
-    // - chatFontFamily: PC uses "" (empty string) which isn't a valid Android enum value
-    // - chatFontFamilyCss: PC-only CSS field
-    // - uiFontSize / chatFontSize: PC-only font size fields
-    const pcOnlyDisplayFields = ["chatFontFamily", "chatFontFamilyCss", "uiFontSize", "chatFontSize", "chatInputHeight"];
-    for (const field of pcOnlyDisplayFields) {
-      if (field in displaySetting) delete displaySetting[field];
+    if (stripPcOnly) {
+      // Strip PC-only displaySetting fields that Android can't deserialize:
+      // - chatFontFamily: PC uses "" (empty string) which isn't a valid Android enum value
+      // - chatFontFamilyCss: PC-only CSS field
+      // - uiFontSize / chatFontSize: PC-only font size fields
+      const pcOnlyDisplayFields = ["chatFontFamily", "chatFontFamilyCss", "uiFontSize", "chatFontSize", "chatInputHeight"];
+      for (const field of pcOnlyDisplayFields) {
+        if (field in displaySetting) delete displaySetting[field];
+      }
     }
     copy.displaySetting = displaySetting;
   }
-  // Strip PC-only top-level fields
-  delete copy.proxyConfig;
-  delete copy.preferredPort;
-  // Fix empty-string UUID fields — Android's Uuid deserializer rejects ""
-  const uuidFields = ["chatModelId", "titleModelId", "translateModeId", "suggestionModelId", "imageGenerationModelId", "ocrModelId", "compressModelId", "assistantId", "selectedTTSProviderId", "selectedASRProviderId"];
-  for (const field of uuidFields) {
-    if (field in copy && (copy[field] === "" || copy[field] === null || copy[field] === undefined)) {
-      copy[field] = crypto.randomUUID();
+  if (stripPcOnly) {
+    // Strip PC-only top-level fields
+    delete copy.proxyConfig;
+    delete copy.preferredPort;
+    // Fix empty-string UUID fields — Android's Uuid deserializer rejects ""
+    const uuidFields = ["chatModelId", "titleModelId", "translateModeId", "suggestionModelId", "imageGenerationModelId", "ocrModelId", "compressModelId", "assistantId", "selectedTTSProviderId", "selectedASRProviderId"];
+    for (const field of uuidFields) {
+      if (field in copy && (copy[field] === "" || copy[field] === null || copy[field] === undefined)) {
+        copy[field] = crypto.randomUUID();
+      }
     }
   }
   return copy;
@@ -4524,7 +4700,7 @@ async function webDavDelete(config: WebDavConfig, fileName: string) {
 
 // AWS Signature Version 4 — see https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html.
 // Supports standard AWS S3 plus any S3-compatible endpoint (MinIO, R2, OSS, COS) by letting the
-// caller override `endpoint` and `forcePathStyle`. The signer always emits `s3` as the service
+// caller override `endpoint` and `pathStyle`. The signer always emits `s3` as the service
 // and `aws4_request` as the terminator, which is correct for both AWS and all major S3 clones.
 function sha256Hex(payload: string | Buffer) {
   return createHash("sha256").update(payload).digest("hex");
@@ -4547,20 +4723,30 @@ function awsUriEncode(value: string, encodeSlash: boolean) {
   return result;
 }
 
+// endpoint 空 = 原生 AWS S3,"auto" 不是 AWS 认可的 region,host 与签名都需要真实 region;
+// endpoint 非空 = S3 兼容服务(R2 / MinIO 等),它们对 region 宽容,"auto" 作为签名占位能被接受。
+// 故仅当 endpoint 空且 region 为空/"auto" 时 fallback 到 us-east-1(AWS 通用默认,也是旧 PC 默认),
+// 避免 host 拼成无效的 s3.auto.amazonaws.com、签名 scope 用 AWS 不认的 "auto"。
+function effectiveS3Region(config: S3Config): string {
+  const region = config.region.trim();
+  if (!config.endpoint.trim() && (region === "" || region.toLowerCase() === "auto")) return "us-east-1";
+  return region || "us-east-1";
+}
+
 function s3EndpointHost(config: S3Config) {
   const explicit = config.endpoint.trim().replace(/\/+$/, "");
   if (explicit) {
     const parsed = new URL(/^https?:\/\//i.test(explicit) ? explicit : `https://${explicit}`);
     return { protocol: parsed.protocol, host: parsed.host, base: `${parsed.protocol}//${parsed.host}` };
   }
-  // Default AWS S3 path-style endpoint per region.
-  const host = `s3.${config.region}.amazonaws.com`;
+  // endpoint 空 = 原生 AWS。region "auto" 对 AWS 无效,effectiveS3Region 已 fallback us-east-1。
+  const host = `s3.${effectiveS3Region(config)}.amazonaws.com`;
   return { protocol: "https:", host, base: `https://${host}` };
 }
 
 function s3RequestUrl(config: S3Config, key: string, query: Record<string, string>) {
   const { base, host } = s3EndpointHost(config);
-  const pathStyle = config.forcePathStyle || Boolean(config.endpoint.trim());
+  const pathStyle = config.pathStyle;
   const path = key ? `/${awsUriEncode(key, false)}` : "/";
   const url = pathStyle ? `${base}/${config.bucket}${path}` : `${base.replace("//", `//${config.bucket}.`)}${path}`;
   const finalHost = pathStyle ? host : `${config.bucket}.${host}`;
@@ -4605,7 +4791,8 @@ function s3Sign(config: S3Config, method: string, key: string, query: Record<str
     signedHeaders,
     payloadHash,
   ].join("\n");
-  const credentialScope = `${dateStamp}/${config.region}/s3/aws4_request`;
+  const region = effectiveS3Region(config);
+  const credentialScope = `${dateStamp}/${region}/s3/aws4_request`;
   const stringToSign = [
     "AWS4-HMAC-SHA256",
     amzDate,
@@ -4613,7 +4800,7 @@ function s3Sign(config: S3Config, method: string, key: string, query: Record<str
     sha256Hex(canonicalRequest),
   ].join("\n");
   const kDate = hmacSha256(`AWS4${config.secretAccessKey}`, dateStamp);
-  const kRegion = hmacSha256(kDate, config.region);
+  const kRegion = hmacSha256(kDate, region);
   const kService = hmacSha256(kRegion, "s3");
   const kSigning = hmacSha256(kService, "aws4_request");
   const signature = createHmac("sha256", kSigning).update(stringToSign).digest("hex");
@@ -4666,8 +4853,9 @@ async function s3Request(
   }
 }
 
-function s3Prefix(config: S3Config) {
-  return config.prefix ? `${config.prefix.replace(/\/+$/, "")}/` : "";
+function s3Prefix() {
+  // 对齐 APP:备份前缀硬编码(APP 无 config 字段,固定 rikkahub_backups/)。
+  return "rikkahub_backups/";
 }
 
 async function s3TestConnection(config: S3Config) {
@@ -4678,7 +4866,7 @@ async function s3TestConnection(config: S3Config) {
 }
 
 async function s3ListBackups(config: S3Config) {
-  const prefix = `${s3Prefix(config)}backup_`;
+  const prefix = `${s3Prefix()}backup_`;
   const response = await s3Request(config, "GET", "", { query: { "list-type": "2", prefix } });
   const text = await response.text();
   if (!response.ok) throw new Error(`S3 列表失败：${response.status} ${text.slice(0, 500)}`);
@@ -4707,7 +4895,7 @@ async function s3ListBackups(config: S3Config) {
 
 async function s3Backup(config: S3Config, onProgress?: (message: string, percent?: number) => void) {
   const fileName = `backup_${backupStamp()}.zip`;
-  const key = `${s3Prefix(config)}${fileName}`;
+  const key = `${s3Prefix()}${fileName}`;
   const tmpRoot = join(tempDir(), `rikkahub-s3-upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   mkdirSync(tmpRoot, { recursive: true });
   const zipPath = join(tmpRoot, fileName);
@@ -4749,7 +4937,7 @@ async function s3Backup(config: S3Config, onProgress?: (message: string, percent
 }
 
 async function s3Restore(config: S3Config, fileName: string, onProgress?: (message: string, percent?: number) => void) {
-  const key = `${s3Prefix(config)}${fileName}`;
+  const key = `${s3Prefix()}${fileName}`;
   onProgress?.("正在下载...", 0);
   const response = await s3Request(config, "GET", key, { timeoutMs: 0 });
   if (!response.ok) {
@@ -4760,7 +4948,7 @@ async function s3Restore(config: S3Config, fileName: string, onProgress?: (messa
 }
 
 async function s3Delete(config: S3Config, fileName: string) {
-  const key = `${s3Prefix(config)}${fileName}`;
+  const key = `${s3Prefix()}${fileName}`;
   const response = await s3Request(config, "DELETE", key);
   const text = await response.text();
   if (!response.ok && response.status !== 204) throw new Error(`S3 删除失败：${response.status} ${text.slice(0, 500)}`);

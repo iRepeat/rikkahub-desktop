@@ -188,12 +188,11 @@ interface WebDavConfig {
 
 interface S3Config {
   endpoint: string;
-  region: string;
   accessKeyId: string;
   secretAccessKey: string;
   bucket: string;
-  prefix: string;
-  forcePathStyle: boolean;
+  region: string;
+  pathStyle: boolean;
   items: string[];
 }
 
@@ -6902,12 +6901,11 @@ function DataSection({
 
   const defaultS3 = (settings.s3Config ?? {
     endpoint: "",
-    region: "us-east-1",
     accessKeyId: "",
     secretAccessKey: "",
     bucket: "",
-    prefix: "rikkahub_backups",
-    forcePathStyle: false,
+    region: "auto",
+    pathStyle: true,
     items: ["DATABASE", "FILES"],
   }) as S3Config;
   const [s3Draft, setS3Draft] = React.useState<S3Config>(defaultS3);
@@ -7125,8 +7123,7 @@ function DataSection({
     defaultS3.accessKeyId,
     defaultS3.secretAccessKey,
     defaultS3.bucket,
-    defaultS3.prefix,
-    defaultS3.forcePathStyle,
+    defaultS3.pathStyle,
     JSON.stringify(defaultS3.items ?? []),
   ]);
 
@@ -7885,8 +7882,8 @@ function DataSection({
             <div className="flex items-center gap-2">
               <span className="text-xs text-muted-foreground">Path-style</span>
               <Switch
-                checked={s3Draft.forcePathStyle}
-                onCheckedChange={(forcePathStyle) => patchS3({ forcePathStyle })}
+                checked={s3Draft.pathStyle}
+                onCheckedChange={(pathStyle) => patchS3({ pathStyle })}
               />
             </div>
           </div>
@@ -7906,7 +7903,7 @@ function DataSection({
               <Input
                 value={s3Draft.region}
                 onChange={(event) => patchS3({ region: event.target.value })}
-                placeholder="us-east-1"
+                placeholder="auto"
               />
             </label>
             <label className="space-y-1">
@@ -7915,16 +7912,6 @@ function DataSection({
                 value={s3Draft.bucket}
                 onChange={(event) => patchS3({ bucket: event.target.value })}
                 placeholder="my-rikkahub-bucket"
-              />
-            </label>
-            <label className="space-y-1">
-              <span className="text-xs font-medium text-muted-foreground">
-                {t("settings:data.prefix_path")}
-              </span>
-              <Input
-                value={s3Draft.prefix}
-                onChange={(event) => patchS3({ prefix: event.target.value })}
-                placeholder="rikkahub_backups"
               />
             </label>
             <label className="space-y-1">
@@ -8618,7 +8605,7 @@ function AboutSection() {
   // Hard-coded current version — must match pc-server/server.ts:APP_VERSION and
   // web-ui/src-tauri/tauri.conf.json:version. The update checker compares this against
   // the latest GitHub release.
-  const APP_VERSION = "1.3.0";
+  const APP_VERSION = "1.3.1";
 
   const [checking, setChecking] = React.useState(false);
   const [updateInfo, setUpdateInfo] = React.useState<UpdateInfo | null>(null);

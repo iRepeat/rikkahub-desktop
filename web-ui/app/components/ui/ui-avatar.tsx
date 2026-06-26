@@ -40,8 +40,10 @@ export function UIAvatar({ name, avatar, size = "default", className }: UIAvatar
   const imageUrl = getAvatarImage(avatar);
   const fallback = getAvatarFallback(name, avatar);
 
-  // Radix Avatar keeps image loading state on the root; force remount when source changes.
-  const avatarIdentity = `${avatar?.type ?? "dummy"}:${avatar?.url ?? ""}:${avatar?.content ?? ""}:${name}`;
+  // Radix Avatar keeps image loading state on the root; force remount when the
+  // avatar source changes. `name` is intentionally excluded so updating the
+  // nickname doesn't remount the image and re-fetch it on every keystroke.
+  const avatarIdentity = `${avatar?.type ?? "dummy"}:${avatar?.url ?? ""}:${avatar?.content ?? ""}`;
 
   return (
     <Avatar key={avatarIdentity} size={size} className={className}>

@@ -883,14 +883,10 @@ export const ConversationSidebar = React.memo(
                     size="default"
                     fallbackName={profileName || userName}
                     value={profileAvatar}
-                    onChange={async (avatar) => {
+                    onChange={(avatar) => {
                       setProfileAvatar(avatar);
-                      await saveProfile(profileName, avatar);
                     }}
                   />
-                  <div className="min-w-0 flex-1 text-sm text-muted-foreground">
-                    {profileName || userName}
-                  </div>
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium" htmlFor="profile-name">

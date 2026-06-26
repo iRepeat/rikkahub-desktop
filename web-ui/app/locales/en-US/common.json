@@ -50,6 +50,12 @@
     "theme_updated": "Theme updated",
     "theme_deleted": "Theme deleted",
     "welcome_back": "Welcome back",
+    "edit_profile": "Edit profile",
+    "edit_profile_description": "This is saved by the local PC backend and used in every chat.",
+    "profile_name": "Name",
+    "profile_name_placeholder": "Your name",
+    "profile_saved": "Profile saved",
+    "profile_save_failed": "Failed to save profile",
     "new_conversation": "New conversation",
     "conversations": "Conversations",
     "loading": "Loading...",
@@ -151,5 +157,24 @@
     "unlock": "Unlock",
     "unlocking": "Unlocking...",
     "unlock_failed": "Failed to unlock Web API access."
+  },
+  "cancel": "Cancel",
+  "save": "Save",
+  "saving": "Saving...",
+  "avatar_cropper": {
+    "upload_and_crop": "Upload & crop",
+    "reset": "Reset",
+    "crop_avatar": "Crop avatar",
+    "crop_description": "Drag to adjust position, use zoom and rotation, then save as your local avatar.",
+    "zoom": "Zoom",
+    "horizontal_move": "Horizontal",
+    "vertical_move": "Vertical",
+    "rotate_left": "Rotate left",
+    "rotate_right": "Rotate right",
+    "cancel": "Cancel",
+    "save_avatar": "Save avatar",
+    "avatar_saved": "Avatar saved",
+    "avatar_upload_failed": "Avatar upload failed",
+    "avatar_process_failed": "Avatar processing failed"
   }
 }

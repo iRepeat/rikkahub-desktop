@@ -8567,6 +8567,8 @@ function AfdianIcon({ className }: { className?: string }) {
   );
 }
 
+// 赞助者数据结构(预留)。赞助用户列表上线后由 /api/sponsors 返回此结构;
+// 接入方案见后端该接口注释。
 interface Sponsor {
   userName: string;
   avatar: string;
@@ -8575,26 +8577,6 @@ interface Sponsor {
 
 function DonateSection() {
   const { t } = useTranslation();
-  const [sponsors, setSponsors] = React.useState<Sponsor[] | null>(null);
-  const [failed, setFailed] = React.useState(false);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    api
-      .get<Sponsor[]>("sponsors")
-      .then((data) => {
-        if (!cancelled) setSponsors(data);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const loading = sponsors === null && !failed;
-
   return (
     <>
       <SectionHeader icon={Heart} title={t("settings:donate.title")} subtitle={t("settings:donate.subtitle")} />
@@ -8625,35 +8607,7 @@ function DonateSection() {
           </div>
         </div>
 
-        <div>
-          <div className="mb-3 text-sm font-medium text-primary">{t("settings:donate.sponsor_list")}</div>
-          {loading ? (
-            <div className="flex justify-center py-10">
-              <Loader2 className="size-5 animate-spin text-muted-foreground" />
-            </div>
-          ) : failed ? (
-            <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-              {t("settings:donate.sponsor_failed")}
-            </div>
-          ) : sponsors!.length === 0 ? (
-            <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-              {t("settings:donate.sponsor_empty")}
-            </div>
-          ) : (
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(3rem,1fr))] gap-4">
-              {sponsors!.map((s) => (
-                <div
-                  key={s.userName + s.avatar}
-                  className="flex flex-col items-center gap-1.5"
-                  title={s.amount ? `${s.userName} · ${s.amount}` : s.userName}
-                >
-                  <img src={s.avatar} alt={s.userName} className="size-12 rounded-full object-cover" loading="lazy" />
-                  <span className="w-full truncate text-center text-xs text-muted-foreground">{s.userName}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        {/* 赞助用户列表暂未上线;数据源就绪后在此恢复,结构见 Sponsor 类型与后端 /api/sponsors 注释。 */}
       </div>
     </>
   );

@@ -15445,8 +15445,13 @@ async function routeApi(request: Request, url: URL) {
     return json({ ok: true });
   }
   if (path === "stats" && request.method === "GET") return json(computeStats());
-  // 赞助者列表。当前无自有数据源,返回空数组;接入 sponsor 数据时只需在此处读取即可,
-  // 前端会展示对应的加载 / 空状态。
+  // ── 赞助者列表(预留接口,待接入数据源)──────────────────────────
+  // 前端 DonateSection 暂未展示该列表;数据源就绪后在此返回即自动渲染。
+  // 方案(零服务器):GitHub Actions 定时调爱发电 query-order API
+  // (user_id + token 的 md5 签名鉴权)分页拉订单 → 按赞助者聚合成下方结构 →
+  // 发布为公开静态 JSON(GitHub Pages / jsDelivr)→ 此处 fetch 并返回(建议加短时缓存)。
+  // token 必须保密(放 Actions Secret,切勿入库)。返回结构须与前端 Sponsor 类型一致:
+  //   { userName: string, avatar: string, amount?: string }
   if (path === "sponsors" && request.method === "GET") return json([]);
   if (path === "data/webdav/config" && request.method === "POST") {
     const body = await readJson<Partial<WebDavConfig>>(request);
